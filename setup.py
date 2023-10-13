@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-HTTPS_GITHUB_URL = "https://github.com/heidelberg-hepml/memennto"
+HTTPS_GITHUB_URL = "https://github.com/NathanHuetsch/GenerativeUnfolding"
 
 #with open("README.md", "r") as fh:
 #    long_description = fh.read()

@@ -5,7 +5,7 @@ import torch.nn as nn
 import numpy as np
 from .inn import Subnet
 from .splines import unconstrained_rational_quadratic_spline
-from .vblinear import VBLinear
+from .layers import VBLinear
 
 L2PI = 0.5 * math.log(2 * math.pi)
 

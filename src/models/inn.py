@@ -7,7 +7,7 @@ import FrEIA.framework as ff
 import FrEIA.modules as fm
 
 from .spline_blocks import RationalQuadraticSplineBlock
-from .vblinear import VBLinear
+from .layers import VBLinear
 
 
 class Subnet(nn.Module):

@@ -5,7 +5,16 @@ HTTPS_GITHUB_URL = "https://github.com/heidelberg-hepml/memennto"
 #with open("README.md", "r") as fh:
 #    long_description = fh.read()
 
-requirements = ["numpy", "pandas", "scipy", "tables", "torch", "FrEIA"]
+requirements = ["numpy",
+                "pandas",
+                "scipy",
+                "tables",
+                "torch",
+                "FrEIA",
+                "pyyaml",
+                "tqdm",
+                "torchdiffeq",
+                "matplotlib"]
 
 setup(
     name="GenerativeUnfolding",

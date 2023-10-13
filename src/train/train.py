@@ -5,17 +5,13 @@ import time
 from datetime import timedelta
 import os
 import torch
-import torch.nn as nn
-import numpy as np
 from ..models.inn import INN
 from ..models.cfm import CFM, CFMwithTransformer
 from ..models.transfermer import Transfermer
 from ..models.transfusion import TransfusionAR, TransfusionParallel
-from ..models.multiplicity import Classifier
-from .preprocessing import build_preprocessing, MultiplicityPreproc, PreprocChain
+from .preprocessing import build_preprocessing, PreprocChain
 from ..processes.base import Process, ProcessData
 from .documenter import Documenter
-from .balanced_sampler import BalancedSampler
 
 
 class Model:
@@ -56,8 +52,6 @@ class Model:
             self.model = eval(model)(dims_in[0], dims_c[0], params)
         except NameError:
             raise NameError("model not recognised. Use exact class name")
-        if model == "Classifier":
-            self.is_classifier = True
         self.model.to(device)
 
         n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -78,19 +72,8 @@ class Model:
         self.n_train_samples = len(input_train)
         bs = self.params.get("batch_size")
         bs_sample = self.params.get("batch_size_sample", 4*bs)
-        balanced_sampling = self.params.get("balanced_sampling")
-        if balanced_sampling is not None:
-            assert len(input_train.shape) == 3
-            n_one_hot = input_train.shape[1] - self.params["min_n_particles"] + 1
-            train_loader_kwargs = {
-                "sampler": BalancedSampler(cond_train[:, 0, -n_one_hot:], balanced_sampling)
-            }
-            val_loader_kwargs = {
-                "sampler": BalancedSampler(cond_val[:, 0, -n_one_hot:], balanced_sampling)
-            }
-        else:
-            train_loader_kwargs = {"shuffle": True}
-            val_loader_kwargs = {"shuffle": False}
+        train_loader_kwargs = {"shuffle": True}
+        val_loader_kwargs = {"shuffle": False}
 
         self.train_loader = self.get_loader(
             input_train, cond_train, batch_size=bs, drop_last=True, **train_loader_kwargs
@@ -409,15 +392,6 @@ class Model:
             else:
                 return all_samples
 
-    def predict_classes(self) -> tuple[torch.Tensor, torch.Tensor]:
-        self.model.eval()
-        with torch.no_grad():
-            mult_true = []
-            mult_predict = []
-            for xs, cs in self.progress(self.test_loader, desc="  Predicting", leave=False):
-                mult_true.append(xs)
-                mult_predict.append(self.model.probs(cs))
-        return torch.cat(mult_true, dim=0), torch.cat(mult_predict, dim=0)
 
     def save(self, name: str):
         """
@@ -455,190 +429,7 @@ class Model:
         self.losses = state_dicts["losses"]
 
 
-class TransferFunction(Model):
-    def __init__(
-        self,
-        params: dict,
-        verbose: bool,
-        device: torch.device,
-        model_path: str,
-        process: Process
-    ):
-        params["mass_mask"] = [m is None for m in process.reco_masses()]
-        self.reco_pp = build_preprocessing(params["reco_preprocessing"], process.reco_masses())
-        self.hard_pp = build_preprocessing(params["hard_preprocessing"], process.hard_masses())
-        self.hard_pp.to(device)
-        self.reco_pp.to(device)
-        if "alpha_preprocessing" in params:
-            self.alpha_pp = build_preprocessing(params["alpha_preprocessing"])
-            self.alpha_pp.to(device)
-        else:
-            self.alpha_pp = None
-        if "multiplicity_model" in params:
-            self.multiplicity_model = load_model(
-                params["multiplicity_model"], process, device
-            )
-            assert (
-                isinstance(self.multiplicity_model.reco_pp, PreprocChain) and
-                isinstance(self.multiplicity_model.reco_pp.trafos[0], MultiplicityPreproc)
-            )
-
-            self.multiplicity_pp = self.multiplicity_model.reco_pp
-            self.multiplicity_classes = self.multiplicity_pp.trafos[0].n_classes
-        else:
-            self.multiplicity_model = None
-            self.multiplicity_classes = 0
-
-        super().__init__(
-            params,
-            verbose,
-            device,
-            model_path,
-            self.reco_pp.output_shape,
-            (
-                *self.hard_pp.output_shape[:-1],
-                self.hard_pp.output_shape[-1]
-                + (self.alpha_pp.output_shape[-1] if self.alpha_pp is not None else 0)
-                + self.multiplicity_classes,
-            ),
-            state_dict_attrs=["reco_pp", "hard_pp"]
-            + ([] if self.alpha_pp is None else ["alpha_pp"]),
-        )
-
-    def prepare_condition(
-        self, x_hard: torch.Tensor, x_reco: torch.Tensor, alpha: torch.Tensor
-    ):
-        features = [self.hard_pp(x_hard)]
-        if len(features[0].shape) == 3:
-            unsqueeze = lambda f: f[:,None,:].expand(-1, features[0].shape[1], -1)
-        else:
-            unsqueeze = lambda f: f
-        if self.alpha_pp is not None:
-            features.append(unsqueeze(self.alpha_pp(alpha)))
-        if self.multiplicity_model is not None:
-            features.append(unsqueeze(self.multiplicity_pp(x_reco)))
-        return torch.cat(features, dim=-1)
-
-    def init_data_loaders(self, data: tuple[ProcessData, ...]):
-        data_train, _, _ = data
-        self.reco_pp.init_normalization(data_train.x_reco)
-        input_data = tuple(self.reco_pp(subset.x_reco) for subset in data)
-        self.hard_pp.init_normalization(data_train.x_hard)
-        if self.alpha_pp is not None:
-            self.alpha_pp.init_normalization(data_train.alpha)
-        cond_data = tuple(
-            self.prepare_condition(subset.x_hard, subset.x_reco, subset.alpha)
-            for subset in data
-        )
-        super().init_data_loaders(input_data, cond_data)
-
-    def predict(self, loader=None) -> torch.Tensor:
-        """
-        Predict one sample for each event from the given loader
-
-        Returns:
-            tensor with samples, shape (n_events, dims_in)
-        """
-        samples = super().predict(loader)
-        if self.model.bayesian:
-            samples_pp = [self.reco_pp(sample, rev=True, jac=False) for sample in samples]
-            samples_pp = torch.stack(samples_pp, dim=0)
-        else:
-            samples_pp = self.reco_pp(samples, rev=True, jac=False)
-        return samples_pp
-
-    def predict_distribution(self, loader=None) -> torch.Tensor:
-        """
-        Predict multiple samples for a part of the test dataset
-
-        Returns:
-            tensor with samples, shape (n_events, n_samples, dims_in)
-        """
-        samples = super().predict_distribution(loader)
-        if self.model.bayesian:
-            samples_pp = [
-                self.reco_pp(
-                    sample.reshape(-1, *sample.shape[2:]),
-                    rev=True,
-                    jac=False,
-                    batch_size=1000,
-                ) for sample in samples
-            ]
-            samples_pp = [
-                sample.reshape(*samples[0].shape[:2], *sample.shape[1:])
-                for sample in samples_pp
-            ]
-            samples_pp = torch.stack(samples_pp, dim=0)
-        else:
-            samples_pp = self.reco_pp(
-                samples.reshape(-1, *samples.shape[2:]),
-                rev=True,
-                jac=False,
-                batch_size=1000,
-            )
-            samples_pp = samples_pp.reshape(*samples.shape[:2], *samples_pp.shape[1:])
-        return samples_pp
-
-    def estimate_transfer(
-        self,
-        x_reco: torch.Tensor,
-        x_hard: torch.Tensor,
-        alpha: torch.Tensor = None,
-        event_type: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Returns the estimated transfer function value for the given events.
-
-        Args:
-            x_reco: Reco-level momenta, shape (n_events, n_reco_particles, 4)
-            x_hard: Hard-scattering momenta, shape (n_events, n_hard_particles, 4)
-            alpha: Theory parameters, shape (n_events, n_parameters)
-            event_type: Type of the event, e.g. LO or NLO, as a one-hot encoded tensor,
-                        shape (n_events, n_types), optional
-        Returns:
-            Tensor with estimated values of the transfer function, shape (n_events, )
-        """
-        self.model.eval()
-        with torch.no_grad():
-            c = self.prepare_condition(x_hard, x_reco, alpha)
-            x, pp_jac = self.reco_pp(x_reco, jac=True)
-            log_prob = self.model.log_prob(x.float(), c.float())
-            if self.multiplicity_model is not None:
-                mult_prob = self.multiplicity_model.estimate_transfer(
-                    x_reco, x_hard, alpha, event_type
-                ).double()
-            else:
-                mult_prob = 0
-            return torch.exp(log_prob.double() - pp_jac.double() + mult_prob)
-
-    def sample_events(
-        self,
-        x_hard: torch.Tensor,
-        alpha: torch.Tensor,
-        event_type: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Samples one reco-level event for each given hard-scattering level event
-
-        Args:
-            x_hard: Hard-scattering momenta, shape (n_events, n_hard_particles, 4)
-            alpha: Theory parameters, shape (n_events, n_parameters)
-            event_type: Type of the event, e.g. LO or NLO, as a one-hot encoded tensor,
-                        shape (n_events, n_types), optional
-        Returns:
-            Tensor with reco-level momenta, shape (n_events, n_reco_particles, 4)
-        """
-        with torch.no_grad():
-            if self.multiplicity_model is not None:
-                x_reco = self.multiplicity_model.sample_events(x_hard, alpha, event_type)
-            else:
-                x_reco = None
-            c = self.prepare_condition(x_hard, x_reco, alpha)
-            x, _ = self.model.sample(c.float())
-            return self.reco_pp(x, rev=True)
-
-
-class ImportanceSampler(Model):
+class UnfoldingModel(Model):
     def __init__(
         self,
         params: dict,
@@ -671,18 +462,7 @@ class ImportanceSampler(Model):
 
     def init_data_loaders(self, data: tuple[ProcessData, ...]):
         sample_transfer_function = self.params.get("sample_transfer_function")
-        if sample_transfer_function is None:
-            self.transfer_function = None
-            reco_data = [subset.x_reco for subset in data]
-        else:
-            self.transfer_function = load_model(sample_transfer_function, self.process, self.device)
-            self.transfer_function.model.eval()
-            reco_data = [self.regenerate_reco_data(subset) for subset in data]
-            if self.transfer_function.model.bayesian:
-                for layer in self.transfer_function.model.bayesian_layers:
-                    layer.map = True
-                print("Using bayesian transfer function with MAP to generate data")
-
+        reco_data = [subset.x_reco for subset in data]
         self.data_train, _, _ = data
         self.hard_pp.init_normalization(self.data_train.x_hard)
         input_data = tuple(self.hard_pp(subset.x_hard) for subset in data)
@@ -693,43 +473,6 @@ class ImportanceSampler(Model):
             for x_reco, subset in zip(reco_data, data)
         )
         super().init_data_loaders(input_data, cond_data)
-
-    def regenerate_reco_data(self, data: ProcessData):
-        batch_size = self.params["batch_size"]
-        batch_size_sample = self.params.get("batch_size_sample", 8*batch_size)
-        x_reco_new = []
-        for x_hard, alpha in self.progress(
-            zip(
-                data.x_hard.split(batch_size_sample, dim=0),
-                data.alpha.split(batch_size_sample, dim=0),
-            ),
-            desc="  Sampling TF",
-            leave=False,
-            total=(len(data.x_hard) + batch_size_sample - 1) // batch_size_sample,
-        ):
-            while True:
-                try:
-                    x_reco_batch = self.transfer_function.sample_events(x_hard, alpha)
-                    if x_reco_batch.isnan().any():
-                        print("Generated nan, repeating batch")
-                    else:
-                        break
-                except AssertionError:
-                    print("Batch failed")
-
-            x_reco_new.append(x_reco_batch)
-        return torch.cat(x_reco_new, dim=0)
-
-    def begin_epoch(self):
-        if self.transfer_function is not None:
-            x_reco_new = self.regenerate_reco_data(self.data_train)
-            input_train = self.hard_pp(self.data_train.x_hard)
-            cond_train = torch.cat(
-                (self.reco_pp(x_reco_new), self.alpha_pp(self.data_train.alpha)), dim=1
-            )
-            self.train_loader = self.get_loader(
-                input_train, cond_train, batch_size=self.params.get("batch_size"), shuffle=True, drop_last=True
-            )
 
     def predict(self, loader=None) -> torch.Tensor:
         """
@@ -817,96 +560,3 @@ class ImportanceSampler(Model):
             x, model_jac = self.model.transform_hypercube(r, c)
             x_hard, pp_jac = self.hard_pp(x, rev=True, jac=True)
             return x_hard, torch.exp(model_jac + pp_jac)
-
-
-class Efficiency(Model):
-    def __init__(
-        self,
-        params: dict,
-        verbose: bool,
-        device: torch.device,
-        model_path: str,
-        process: Process
-    ):
-        self.hard_pp = build_preprocessing(params["hard_preprocessing"], process.hard_masses())
-        self.hard_pp.to(device)
-        if "alpha_preprocessing" in params:
-            self.alpha_pp = build_preprocessing(params["alpha_preprocessing"])
-            self.alpha_pp.to(device)
-        else:
-            self.alpha_pp = None
-
-        super().__init__(
-            params,
-            verbose,
-            device,
-            model_path,
-            (1, ),
-            (
-                *self.hard_pp.output_shape[:-1],
-                self.hard_pp.output_shape[-1]
-                + (self.alpha_pp.output_shape[-1] if self.alpha_pp is not None else 0)
-            ),
-            state_dict_attrs=["hard_pp"]
-            + ([] if self.alpha_pp is None else ["alpha_pp"]),
-        )
-
-    def prepare_condition(
-        self, x_hard: torch.Tensor, alpha: torch.Tensor
-    ):
-        features = [self.hard_pp(x_hard)]
-        if len(features[0].shape) == 3:
-            unsqueeze = lambda f: f[:,None,:].expand(-1, features[0].shape[1], -1)
-        else:
-            unsqueeze = lambda f: f
-        if self.alpha_pp is not None:
-            features.append(unsqueeze(self.alpha_pp(alpha)))
-        return torch.cat(features, dim=-1)
-
-    def init_data_loaders(self, data: tuple[ProcessData, ...]):
-        data_train, _, _ = data
-        input_data = tuple(subset.accepted[:,None] for subset in data)
-        self.hard_pp.init_normalization(data_train.x_hard)
-        if self.alpha_pp is not None:
-            self.alpha_pp.init_normalization(data_train.alpha)
-        cond_data = tuple(
-            self.prepare_condition(subset.x_hard, subset.alpha)
-            for subset in data
-        )
-        super().init_data_loaders(input_data, cond_data)
-
-    def estimate_efficiency(
-        self,
-        x_hard: torch.Tensor,
-        alpha: torch.Tensor = None,
-        event_type: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Returns the estimated efficiency for the given events.
-
-        Args:
-            x_hard: Hard-scattering momenta, shape (n_events, n_hard_particles, 4)
-            alpha: Theory parameters, shape (n_events, n_parameters)
-            event_type: Type of the event, e.g. LO or NLO, as a one-hot encoded tensor,
-                        shape (n_events, n_types), optional
-        Returns:
-            Tensor with estimated values of the transfer function, shape (n_events, )
-        """
-        with torch.no_grad():
-            c = self.prepare_condition(x_hard, alpha)
-            return self.model.probs(c.float())
-
-
-def load_model(run_name: str, process: Process, device: torch.device) -> Model:
-    doc, params = Documenter.from_saved_run(run_name, read_only=True)
-    model_path = doc.get_file("model", False)
-    if params["type"] == "transfer_function":
-        model = TransferFunction(params, False, device, model_path, process)
-    elif params["type"] == "importance_sampler":
-        model = ImportanceSampler(params, False, device, model_path, process)
-    elif params["type"] == "efficiency":
-        model = Efficiency(params, False, device, model_path, process)
-    else:
-        raise ValueError(f"Unknown model type '{params['type']}'")
-    model.load("final")
-    return model

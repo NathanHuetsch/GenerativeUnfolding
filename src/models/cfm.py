@@ -4,10 +4,8 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
-from .vblinear import VBLinear
 from torchdiffeq import odeint
-from .layers import GaussianFourierProjection, autograd_trace, hutch_trace, SinCos_embedding, Subnet, Resnet
-from .optimal_transport import OTPlanSampler
+from .layers import *
 
 
 class CFM(nn.Module):
@@ -48,12 +46,6 @@ class CFM(nn.Module):
             print(f"Using ODE method {self.method}, atol {self.atol}, rtol {self.rtol}, hutch {self.hutch}", flush=True)
         else:
             print(f"Using ODE method {self.method}, step_size {self.step_size}, hutch {self.hutch}", flush=True)
-
-        self.use_OT = self.params.get("use_OT", False)
-        if self.use_OT:
-            ot_method = self.params.get("OT_method", "exact")
-            self.OT_sampler = OTPlanSampler(method=ot_method)
-            print(f"Using OT with method {ot_method}")
 
         self.embed_c = self.params.get("embed_c", False)
         if self.embed_c:

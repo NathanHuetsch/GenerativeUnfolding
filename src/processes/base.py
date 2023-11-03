@@ -13,16 +13,10 @@ class ProcessData:
     Args:
         x_hard: Hard-scattering momenta, shape (n_events, n_hard_particles, 4)
         x_reco: Reco-level momenta, shape (n_events, n_reco_particles, 4)
-        alpha: Theory parameters, shape (n_events, n_parameters)
-        event_type: Type of the event, e.g. LO or NLO, as a one-hot encoded tensor,
-                    shape (n_events, n_types), optional
     """
 
     x_hard: torch.Tensor
     x_reco: Optional[torch.Tensor] = None
-    alpha: Optional[torch.Tensor] = None
-    event_type: Optional[torch.Tensor] = None
-    accepted: Optional[torch.Tensor] = None
 
 
 class Process(ABC):

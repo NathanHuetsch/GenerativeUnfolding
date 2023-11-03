@@ -9,9 +9,11 @@ from ..models.inn import INN
 from ..models.cfm import CFM, CFMwithTransformer
 from ..models.transfermer import Transfermer
 from ..models.transfusion import TransfusionAR, TransfusionParallel
+from ..models.fff import FreeFormFlow
 from .preprocessing import build_preprocessing, PreprocChain
 from ..processes.base import Process, ProcessData
 from .documenter import Documenter
+from ..processes.zjets.process import ZjetsProcess
 
 
 class Model:
@@ -71,7 +73,7 @@ class Model:
         cond_train, cond_val, cond_test = cond_data
         self.n_train_samples = len(input_train)
         bs = self.params.get("batch_size")
-        bs_sample = self.params.get("batch_size_sample", 4*bs)
+        bs_sample = self.params.get("batch_size_sample", bs)
         train_loader_kwargs = {"shuffle": True}
         val_loader_kwargs = {"shuffle": False}
 
@@ -152,7 +154,7 @@ class Model:
             weight_decay=self.params.get("weight_decay", 0.0),
         )
 
-        self.lr_sched_mode = self.params.get("lr_scheduler", "one_cycle_lr")
+        self.lr_sched_mode = self.params.get("lr_scheduler", None)
         if self.lr_sched_mode == "step":
             self.scheduler = torch.optim.lr_scheduler.StepLR(
                 self.optimizer,
@@ -172,7 +174,7 @@ class Model:
                 T_max= self.params["epochs"] * len(self.train_loader)
             )
         else:
-            raise ValueError(f"Unknown LR scheduler {self.lr_sched_mode}")
+            self.scheduler = None
 
     def begin_epoch(self):
         """
@@ -357,7 +359,7 @@ class Model:
         self.model.eval()
         bayesian_samples = self.params.get("bayesian_samples", 20) if self.model.bayesian else 1
         max_batches = min(len(loader), self.params.get("max_dist_batches", 2))
-        samples_per_event = self.params.get("dist_samples_per_event", 60)
+        samples_per_event = self.params.get("dist_samples_per_event", 2)
         with torch.no_grad():
             all_samples = []
             for j in range(bayesian_samples):
@@ -439,12 +441,10 @@ class UnfoldingModel(Model):
         process: Process
     ):
         self.process = process
-        self.hard_pp = build_preprocessing(params["hard_preprocessing"], process.hard_masses())
-        self.reco_pp = build_preprocessing(params["reco_preprocessing"], process.reco_masses())
-        self.alpha_pp = build_preprocessing(params["alpha_preprocessing"])
+        self.hard_pp = build_preprocessing(params["hard_preprocessing"], n_dim=6)
+        self.reco_pp = build_preprocessing(params["reco_preprocessing"], n_dim=6)
         self.hard_pp.to(device)
         self.reco_pp.to(device)
-        self.alpha_pp.to(device)
         self.latent_dimension = self.hard_pp.output_shape[0] #TODO: do this properly!!!!!
 
         super().__init__(
@@ -455,23 +455,17 @@ class UnfoldingModel(Model):
             self.hard_pp.output_shape,
             (
                 *self.reco_pp.output_shape[:-1],
-                self.reco_pp.output_shape[-1] + self.alpha_pp.output_shape[-1],
+                self.reco_pp.output_shape[-1],
             ),
-            state_dict_attrs=["hard_pp", "reco_pp", "alpha_pp"],
+            state_dict_attrs=["hard_pp", "reco_pp"],
         )
 
     def init_data_loaders(self, data: tuple[ProcessData, ...]):
-        sample_transfer_function = self.params.get("sample_transfer_function")
-        reco_data = [subset.x_reco for subset in data]
         self.data_train, _, _ = data
         self.hard_pp.init_normalization(self.data_train.x_hard)
         input_data = tuple(self.hard_pp(subset.x_hard) for subset in data)
         self.reco_pp.init_normalization(self.data_train.x_reco)
-        self.alpha_pp.init_normalization(self.data_train.alpha)
-        cond_data = tuple(
-            torch.cat((self.reco_pp(x_reco), self.alpha_pp(subset.alpha)), dim=1)
-            for x_reco, subset in zip(reco_data, data)
-        )
+        cond_data = tuple(self.reco_pp(subset.x_reco) for subset in data)
         super().init_data_loaders(input_data, cond_data)
 
     def predict(self, loader=None) -> torch.Tensor:
@@ -506,9 +500,7 @@ class UnfoldingModel(Model):
     def sample_events(
         self,
         n_samples: int,
-        x_reco: torch.Tensor,
-        alpha: torch.Tensor,
-        event_type: Optional[torch.Tensor] = None,
+        x_reco: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Samples hard-scattering level events for the given reco-level events.
@@ -524,39 +516,10 @@ class UnfoldingModel(Model):
             Tensor with phase space densities, shape (n_samples, n_events)
         """
         with torch.no_grad():
-            n_events = max(len(x_reco), len(alpha))
-            c = torch.cat((
-                self.reco_pp(x_reco).expand(n_events, -1),
-                self.alpha_pp(alpha).expand(n_events, -1)
-            ), dim=1).float()
+            n_events = len(x_reco)
+            c = self.reco_pp(x_reco).expand(n_events, -1).float()
             x, log_prob = self.model.sample_with_probs(c)
             x_hard, jac = self.hard_pp(x, rev=True, jac=True)
             return x_hard.reshape(n_samples, -1, *x_hard.shape[1:]), torch.exp(
                 log_prob - jac
             )
-
-    def transform_hypercube(
-        self,
-        r: torch.Tensor,
-        x_reco: torch.Tensor,
-        alpha: torch.Tensor,
-        event_type: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Samples hard-scattering level events for the given reco-level events.
-
-        Args:
-            r: points on the the unit hypercube, shape (n_samples, dims_in)
-            x_reco: Reco-level momenta, shape (n_samples, n_reco_particles, 4)
-            alpha: Theory parameters, shape (n_samples, n_parameters)
-            event_type: Type of the event, e.g. LO or NLO, as a one-hot encoded tensor,
-                        shape (n_samples, n_types), optional
-        Returns:
-            Tensor with hard-scattering momenta, shape (n_samples, n_hard_particles, 4)
-            Tensor with jacobians, shape (n_samples, )
-        """
-        with torch.no_grad():
-            c = torch.cat((self.reco_pp(x_reco), self.alpha_pp(alpha)), dim=1).float()
-            x, model_jac = self.model.transform_hypercube(r, c)
-            x_hard, pp_jac = self.hard_pp(x, rev=True, jac=True)
-            return x_hard, torch.exp(model_jac + pp_jac)

@@ -5,7 +5,6 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from scipy.stats import binned_statistic
 from matplotlib.backends.backend_pdf import PdfPages
 import torch
 
@@ -34,10 +33,10 @@ class Plots:
         self,
         observables: list[Observable],
         losses: dict,
-        x_test: torch.Tensor,
+        x_hard: torch.Tensor,
+        x_reco: torch.Tensor,
         x_gen_single: torch.Tensor,
         x_gen_dist: torch.Tensor,
-        event_type: Optional[torch.Tensor],
         bayesian: bool = False
     ):
         """
@@ -55,18 +54,25 @@ class Plots:
         self.observables = observables
         self.losses = losses
 
-        self.obs_test = []
+        self.obs_hard = []
+        self.obs_reco = []
         self.obs_gen_single = []
         self.obs_gen_dist = []
         self.bins = []
         for obs in observables:
-            o_test = obs.compute(x_test, event_type)
-            self.obs_test.append(o_test.cpu().numpy())
-            self.obs_gen_single.append(
-                obs.compute(x_gen_single, event_type).cpu().numpy()
-            )
-            self.obs_gen_dist.append(obs.compute(x_gen_dist, event_type).cpu().numpy())
-            self.bins.append(obs.bins(o_test).cpu().numpy())
+            o_hard = obs.compute(x_hard)
+            self.obs_hard.append(o_hard.cpu().numpy())
+
+            o_reco = obs.compute(x_reco)
+            self.obs_reco.append(o_reco.cpu().numpy())
+
+            o_gen_single = obs.compute(x_gen_single)
+            self.obs_gen_single.append(o_gen_single.cpu().numpy())
+
+            o_gen_dist = obs.compute(x_gen_dist)
+            self.obs_gen_dist.append(o_gen_dist.cpu().numpy())
+
+            self.bins.append(obs.bins(o_hard).cpu().numpy())
 
         self.bayesian = bayesian
 
@@ -142,26 +148,32 @@ class Plots:
         Args:
             file: Output file name
         """
-
         pickle_data = []
         with PdfPages(file) as pp:
-            for obs, bins, data_true, data_gen in zip(
-                self.observables, self.bins, self.obs_test, self.obs_gen_single
+            for obs, bins, data_hard, data_reco, data_gen in zip(
+                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_single
             ):
-                y_true, y_true_err = self.compute_hist_data(bins, data_true, bayesian=False)
+                y_hard, y_hard_err = self.compute_hist_data(bins, data_hard, bayesian=False)
+                y_reco, y_reco_err = self.compute_hist_data(bins, data_reco, bayesian=False)
                 y_gen, y_gen_err = self.compute_hist_data(bins, data_gen, bayesian=self.bayesian)
                 lines = [
                     Line(
-                        y=y_true,
-                        y_err=y_true_err,
-                        label="Truth",
+                        y=y_reco,
+                        y_err=y_reco_err,
+                        label="Reco",
+                        color=self.colors[2],
+                    ),
+                    Line(
+                        y=y_hard,
+                        y_err=y_hard_err,
+                        label="Hard",
                         color=self.colors[0],
                     ),
                     Line(
                         y=y_gen,
                         y_err=y_gen_err,
-                        y_ref=y_true,
-                        label="Gen",
+                        y_ref=y_hard,
+                        label="Unfold",
                         color=self.colors[1],
                     ),
                 ]
@@ -183,7 +195,7 @@ class Plots:
 
         with PdfPages(file) as pp:
             for obs, data_true, data_gen in zip(
-                self.observables, self.obs_test, self.obs_gen_dist
+                self.observables, self.obs_hard, self.obs_gen_dist
             ):
                 data_true = data_true[None, ...]
                 if not self.bayesian:
@@ -223,7 +235,7 @@ class Plots:
         bins = np.linspace(-5, 5, 40)
         with PdfPages(file) as pp:
             for obs, data_true, data_gen in zip(
-                self.observables, self.obs_test, self.obs_gen_dist
+                self.observables, self.obs_hard, self.obs_gen_dist
             ):
                 data_true = data_true[: data_gen.shape[-2]]
                 gen_mean = np.mean(data_gen, axis=-1)
@@ -250,7 +262,7 @@ class Plots:
 
         with PdfPages(file) as pp:
             for obs, bins, data_true, data_gen in zip(
-                self.observables, self.bins, self.obs_test, self.obs_gen_dist
+                self.observables, self.bins, self.obs_hard, self.obs_gen_dist
             ):
                 for i in range(5):
                     x_true = data_gen
@@ -373,8 +385,8 @@ class Plots:
 
             if show_ratios:
                 axs[1].set_ylabel(r"$\frac{\mathrm{Model}}{\mathrm{Truth}}$")
-                axs[1].set_yticks([0.8, 1, 1.2])
-                axs[1].set_ylim([0.75, 1.25])
+                axs[1].set_yticks([0.9, 1, 1.1])
+                axs[1].set_ylim([0.85, 1.15])
                 axs[1].axhline(y=1, c="black", ls="--", lw=0.7)
                 axs[1].axhline(y=1.2, c="black", ls="dotted", lw=0.5)
                 axs[1].axhline(y=0.8, c="black", ls="dotted", lw=0.5)
@@ -383,7 +395,6 @@ class Plots:
             axs[-1].set_xlabel(f"${{{observable.tex_label}}}${unit}")
             axs[-1].set_xscale(observable.xscale)
             axs[-1].set_xlim(bins[0], bins[-1])
-
             plt.savefig(pdf, format="pdf", bbox_inches="tight")
             plt.close()
 

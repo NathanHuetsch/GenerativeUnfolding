@@ -7,7 +7,7 @@ import FrEIA.framework as ff
 import FrEIA.modules as fm
 
 from .spline_blocks import RationalQuadraticSplineBlock
-from .layers import VBLinear
+from .layers import VBLinear, MixtureDistribution
 
 
 class Subnet(nn.Module):
@@ -88,7 +88,25 @@ class INN(nn.Module):
         if self.bayesian:
             self.bayesian_samples = params.get("bayesian_samples", 20)
             self.bayesian_layers = []
+
         self.latent_space = self.params.get("latent_space", "gaussian")
+        if self.latent_space == "gaussian":
+            self.latent_dist = torch.distributions.multivariate_normal.MultivariateNormal(
+                torch.zeros(self.dims_in), torch.eye(self.dims_in))
+            print("latent space: gaussian")
+        elif self.latent_space == "uniform":
+            uniform_bounds = self.params.get("uniform_bounds", [0., 1.])
+            self.uniform_logprob = uniform_bounds[1]-uniform_bounds[0]
+            self.latent_dist = torch.distributions.uniform.Uniform(
+                torch.full((self.dims_in,), uniform_bounds[0]), torch.full((self.dims_in,), uniform_bounds[1]))
+            print(f"latent space: uniform with bounds {uniform_bounds}")
+        elif self.latent_space == "mixture":
+            self.uniform_channels = self.params.get("uniform_channels")
+            self.normal_channels = [i for i in range(self.dims_in) if i not in self.uniform_channels]
+            self.latent_dist = MixtureDistribution(normal_channels=self.normal_channels,
+                                                   uniform_channels=self.uniform_channels)
+            print(f"latent space: mixture with uniform channels {self.uniform_channels}")
+
         self.build_inn()
 
     def get_constructor_func(self) -> Callable[[int, int], nn.Module]:
@@ -192,7 +210,7 @@ class INN(nn.Module):
         if self.latent_space == "gaussian":
             return -(z**2 / 2 + 0.5 * math.log(2 * math.pi)).sum(dim=1)
         elif self.latent_space == "uniform":
-            return 0.0
+            return self.uniform_logprob
 
     def log_prob(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """
@@ -203,28 +221,9 @@ class INN(nn.Module):
             c: condition tensor, shape (n_events, dims_c)
         Returns:
             log probabilities, shape (n_events, ) if not bayesian
-                               shape (1+self.bayesian_samples, n_events) if bayesian
         """
-        if not self.bayesian_transfer:
-            z, jac = self.inn(x, (c,))
-            return self.latent_log_prob(z) + jac
-
-        else:
-            log_probs = []
-            for layer in self.bayesian_layers:
-                layer.map = True
-            z_map, jac_map = self.inn(x, (c,))
-            log_probs.append(self.latent_log_prob(z_map) + jac_map)
-
-            for layer in self.bayesian_layers:
-                layer.map = False
-
-            for random_state in self.random_states:
-                self.import_random_state(random_state)
-                z, jac = self.inn(x, (c,))
-                log_probs.append(self.latent_log_prob(z) + jac)
-
-            return torch.stack(log_probs, dim=0)
+        z, jac = self.inn(x, (c,))
+        return self.latent_log_prob(z) + jac
 
     def sample(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -236,7 +235,7 @@ class INN(nn.Module):
             x: generated samples, shape (n_events, dims_in)
             log_prob: log probabilites, shape (n_events, )
         """
-        z = torch.randn((c.shape[0], self.dims_in), dtype=c.dtype, device=c.device)
+        z = self.latent_dist.sample((c.shape[0],)).to(c.device, dtype=c.dtype)
         x, jac = self.inn(z, (c,), rev=True)
         return x, self.latent_log_prob(z) - jac
 

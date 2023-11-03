@@ -8,7 +8,7 @@ from .documenter import Documenter
 from .train import Model, UnfoldingModel
 from .plots import Plots
 from ..processes.base import Process
-from ..processes.thj_lo.process import LoThjProcess
+from ..processes.zjets.process import ZjetsProcess
 
 
 def init_train_args(subparsers):
@@ -53,7 +53,7 @@ def init_run(doc: Documenter, params: dict, verbose: bool) -> tuple[Model, Proce
     device = torch.device("cuda:0" if use_cuda else "cpu")
 
     print("Loading data")
-    process = LoThjProcess(params["process_params"], device)
+    process = ZjetsProcess(params["process_params"], device)
     data = (
         process.get_data("train"),
         process.get_data("val"),
@@ -85,6 +85,8 @@ def evaluation(
         loader = model.test_loader
     elif data == "train":
         loader = model.train_loader
+    elif data == "analysis":
+        loader = build_analysis_loader(params, model, process)
 
     model.load(model_name)
 
@@ -118,13 +120,13 @@ def evaluation(
     data = process.get_data(data)
     observables = process.hard_observables()
     plots = Plots(
-        observables,
-        model.losses,
-        data.x_hard,
-        x_gen_single,
-        x_gen_dist,
-        data.event_type,
-        model.model.bayesian
+        observables=observables,
+        losses=model.losses,
+        x_hard=data.x_hard,
+        x_reco=data.x_reco,
+        x_gen_single=x_gen_single,
+        x_gen_dist=x_gen_dist,
+        bayesian=model.model.bayesian
     )
     print("  Plotting loss")
     plots.plot_losses(doc.add_file("losses"+name+".pdf"))
@@ -136,10 +138,25 @@ def evaluation(
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
     print("  Plotting calibration")
     plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
-    print("  Plotting pulls")
-    plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
-    print("  Plotting single events")
-    plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
+    #print("  Plotting pulls")
+    #plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
+    #print("  Plotting single events")
+    #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
+
+def build_analysis_loader(
+    params: dict,
+    model: Model,
+    process: Process):
+
+    analysis_data = process.get_data("analysis")
+    analysis_loader = model.get_loader(input_data=model.hard_pp(analysis_data.x_hard),
+                                       cond_data=model.reco_pp(analysis_data.x_reco),
+                                       batch_size=params["batch_size"],
+                                       drop_last=False,
+                                       shuffle=False)
+    return analysis_loader
+
+
 
 
 def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
@@ -150,3 +167,6 @@ def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
         evaluation(doc, params, model, process, model_name="best", name="_best")
         if params.get("evaluate_train", False):
             evaluation(doc, params, model, process, model_name="best", data="train", name="_best_train")
+
+    if params.get("evaluate_analysis"):
+        evaluation(doc, params, model, process, data="analysis", name="_analysis")

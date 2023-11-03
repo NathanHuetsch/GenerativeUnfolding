@@ -5,10 +5,7 @@
 #PBS -o output.txt
 #PBS -e error.txt
 export CUDA_VISIBLE_DEVICES=$(cat $PBS_GPUFILE | sed s/.*-gpu// )
-module load anaconda/3.0
-module load cuda/11.8
-source activate /remote/gpu07/huetsch/madgraph
+source venv/bin/activate
 cd GenerativeUnfolding
 
-#pip install --editable .
-memennto train $1
+src train $1

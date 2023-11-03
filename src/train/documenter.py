@@ -45,12 +45,12 @@ class Documenter:
         """
         with open(param_file) as f:
             params = yaml.load(f, Loader=yaml.FullLoader)
-        doc = Documenter(params["run_name"])
+        doc = Documenter(params["run_name"], params.get("run_folder"), None)
         shutil.copy(param_file, doc.add_file("params.yaml", False))
         return doc, params
 
     def __init__(
-        self, run_name: str, existing_run: Optional[str] = None, read_only: bool = False
+        self, run_name: str, run_folder: str = None, existing_run: Optional[str] = None, read_only: bool = False
     ):
         """
         If existing_run is None, a new output folder named as run_name prefixed by date
@@ -64,13 +64,15 @@ class Documenter:
         self.run_name = run_name
         script_dir = os.path.dirname(os.path.abspath(__file__))
         base_dir_parts = [script_dir, "..", "..", "output"]
+        if run_folder is not None:
+            base_dir_parts.append(run_folder)
         if existing_run is None:
             now = datetime.now()
             while True:
                 full_run_name = now.strftime("%Y%m%d_%H%M%S") + "_" + run_name
                 self.basedir = os.path.join(*base_dir_parts, full_run_name)
                 try:
-                    os.mkdir(self.basedir)
+                    os.makedirs(self.basedir)
                     break
                 except FileExistsError:
                     now += timedelta(seconds=1)

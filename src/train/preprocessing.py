@@ -80,7 +80,8 @@ class PreprocChain(PreprocTrafo):
         norm_keep_zeros: bool = False,
         norm_mask: Optional[torch.Tensor] = None,
         individual_norms: bool = True,
-        n_dim: int = None
+        n_dim: int = None,
+        unit_hypercube: bool = False
     ):
         if any(
             tp.output_shape != tn.input_shape
@@ -90,7 +91,9 @@ class PreprocChain(PreprocTrafo):
                 f"Output shape {trafos[0].output_shape} of transformation {0} not "
                 + f"equal to input shape {trafos[1].input_shape} of transformation {1}"
             )
+
         trafos.append(NormalizationPreproc((n_dim,), norm_keep_zeros, norm_mask))
+
         super().__init__(
             trafos[0].input_shape,
             trafos[-1].output_shape,
@@ -101,6 +104,7 @@ class PreprocChain(PreprocTrafo):
         self.normalize = normalize
         self.norm_keep_zeros = norm_keep_zeros
         self.individual_norms = individual_norms
+        self.unit_hypercube = unit_hypercube
 
     def init_normalization(self, x: torch.Tensor, batch_size: int = 100000):
         if not self.normalize:
@@ -118,7 +122,12 @@ class PreprocChain(PreprocTrafo):
             x_std = torch.sqrt(torch.sum((x - x_mean) ** 2, dim=norm_dims, keepdims=True) / x_count)
         else:
             x_mean = x.mean(dim=norm_dims, keepdims=True)
-            x_std = x.std(dim=norm_dims, keepdims=True)
+            if self.unit_hypercube:
+                mins = torch.min(x-x.mean(dim=0), dim=0)[0]
+                maxs = torch.max(x-x.mean(dim=0), dim=0)[0]
+                x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
+            else:
+                x_std = x.std(dim=norm_dims, keepdims=True)
         self.trafos[-1].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
 
     def transform(
@@ -170,7 +179,27 @@ class NormalizationPreproc(PreprocTrafo):
         return z, jac.expand(x.shape[0])  # TODO: fix jacobians
 
 
-def build_preprocessing(params: dict, n_dim=None) -> PreprocChain:
+class UnitHypercubePreprocessing(PreprocTrafo):
+    def __init__(self, shape: Tuple[int, ...],):
+
+        super().__init__(
+            input_shape=shape, output_shape=shape, invertible=True, has_jacobian=True
+        )
+
+    def transform(
+        self, x: torch.Tensor, rev: bool, jac: bool
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if rev:
+            z, jac = x * self.factors, self.jac
+        else:
+
+            self.jac = self.factors.log().sum()
+            z, jac = x / self.factors, -self.jac
+            print(z.min(), z.max())
+        return z, jac.expand(x.shape[0])
+
+
+def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
     """
     Builds a preprocessing chain with the given parameters
 
@@ -183,6 +212,7 @@ def build_preprocessing(params: dict, n_dim=None) -> PreprocChain:
     norm_mask = None
     keep_zeros = False
     individual_norms = True
+    unit_hypercube = params.get("unit_hypercube", False)
 
     return PreprocChain(
         [],
@@ -190,5 +220,6 @@ def build_preprocessing(params: dict, n_dim=None) -> PreprocChain:
         norm_keep_zeros=keep_zeros,
         norm_mask=norm_mask,
         individual_norms=individual_norms,
-        n_dim=n_dim
+        n_dim=n_dim,
+        unit_hypercube=unit_hypercube
     )

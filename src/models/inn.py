@@ -70,7 +70,7 @@ class INN(nn.Module):
     Class implementing a standard conditional INN
     """
 
-    def __init__(self, dims_in: int, dims_c: int, params: dict):
+    def __init__(self, params: dict):
         """
         Initializes and builds the conditional INN
 
@@ -81,8 +81,8 @@ class INN(nn.Module):
         """
         super().__init__()
         self.params = params
-        self.dims_in = dims_in
-        self.dims_c = dims_c
+        self.dims_in = params["dims_in"]
+        self.dims_c = params["dims_c"]
         self.bayesian = params.get("bayesian", False)
         self.bayesian_transfer = False
         if self.bayesian:
@@ -93,21 +93,23 @@ class INN(nn.Module):
         if self.latent_space == "gaussian":
             self.latent_dist = torch.distributions.multivariate_normal.MultivariateNormal(
                 torch.zeros(self.dims_in), torch.eye(self.dims_in))
-            print("latent space: gaussian")
+            print(f"        latent space: gaussian")
         elif self.latent_space == "uniform":
             uniform_bounds = self.params.get("uniform_bounds", [0., 1.])
             self.uniform_logprob = uniform_bounds[1]-uniform_bounds[0]
             self.latent_dist = torch.distributions.uniform.Uniform(
                 torch.full((self.dims_in,), uniform_bounds[0]), torch.full((self.dims_in,), uniform_bounds[1]))
-            print(f"latent space: uniform with bounds {uniform_bounds}")
+            print(f"        latent space: uniform with bounds {uniform_bounds}")
         elif self.latent_space == "mixture":
             self.uniform_channels = self.params.get("uniform_channels")
             self.normal_channels = [i for i in range(self.dims_in) if i not in self.uniform_channels]
             self.latent_dist = MixtureDistribution(normal_channels=self.normal_channels,
                                                    uniform_channels=self.uniform_channels)
-            print(f"latent space: mixture with uniform channels {self.uniform_channels}")
+            print(f"        latent space: mixture with uniform channels {self.uniform_channels}")
 
         self.build_inn()
+        if self.bayesian:
+            print(f"        Bayesian set to True, Bayesian layers: ", len(self.bayesian_layers))
 
     def get_constructor_func(self) -> Callable[[int, int], nn.Module]:
         """
@@ -150,6 +152,7 @@ class INN(nn.Module):
         coupling_type = self.params.get("coupling_type", "affine")
 
         if coupling_type == "affine":
+            print(f"        Coupling: affine")
             if self.latent_space == "uniform":
                 raise ValueError("Affine couplings only support gaussian latent space")
             CouplingBlock = fm.AllInOneBlock
@@ -160,12 +163,17 @@ class INN(nn.Module):
                 "permute_soft": permute_soft,
             }
         elif coupling_type == "rational_quadratic":
+            print(f"        Coupling: RQS")
             if self.latent_space == "gaussian":
                 upper_bound = self.params.get("bounds", 10)
                 lower_bound = -upper_bound
+                left_bound = lower_bound
+                right_bound = upper_bound
             elif self.latent_space == "uniform":
                 lower_bound = 0
                 upper_bound = 1
+                right_bound = self.params.get("input_bound", 1)
+                left_bound = -right_bound
                 if permute_soft:
                     raise ValueError(
                         "Soft permutations not supported for uniform latent space"
@@ -176,8 +184,8 @@ class INN(nn.Module):
             block_kwargs = {
                 "num_bins": self.params.get("num_bins", 10),
                 "subnet_constructor": constructor_fct,
-                "left": lower_bound,
-                "right": upper_bound,
+                "left": left_bound,
+                "right": right_bound,
                 "bottom": lower_bound,
                 "top": upper_bound,
                 "permute_soft": permute_soft,

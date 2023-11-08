@@ -13,7 +13,7 @@ class CFM(nn.Module):
     Class implementing a conditional CFM model
     """
 
-    def __init__(self, dims_in: int, dims_c: int, params: dict):
+    def __init__(self, params: dict):
         """
         Initializes and builds the conditional CFM
 
@@ -23,12 +23,9 @@ class CFM(nn.Module):
             params: dictionary with architecture/hyperparameters
         """
         super().__init__()
-        print("------- Building CFM -------")
         self.params = params
-        self.dims_in = dims_in
-        self.dims_c = dims_c
-        self.params["dims_in"] = self.dims_in
-        self.params["dims_c"] = self.dims_c
+        self.dims_in = params["dims_in"]
+        self.dims_c = params["dims_c"]
         self.bayesian = params.get("bayesian", False)
         self.bayesian_samples = params.get("bayesian_samples", 20)
         self.bayesian_layers = []
@@ -48,10 +45,7 @@ class CFM(nn.Module):
         self.add_noise = self.params.get("add_noise", False)
         if self.add_noise:
             self.add_noise_scale = self.params.get("add_noise_scale", 1.e-4)
-            print(f"add noise: True with scale {self.add_noise_scale}")
-
-        print("------- Finished CFM -------")
-
+            print(f"        add noise: True with scale {self.add_noise_scale}")
 
     def build_net(self):
         """
@@ -62,7 +56,7 @@ class CFM(nn.Module):
         network = self.params["network_params"].get("network_class", Subnet)
         self.net = eval(network)(params=self.params)
         n_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
-        print(f"Network: {network} with {n_params} parameters")
+        print(f"        Network: {network} with {n_params} parameters")
 
         if self.bayesian:
             if isinstance(self.net, Subnet):
@@ -75,7 +69,7 @@ class CFM(nn.Module):
                 #        layer for layer in block.layer_list if isinstance(layer, VBLinear)
                 #    )
                 raise ValueError("Bayesian only implemented for Subnet atm")
-            print("Bayesian set to True, Bayesian layers: ", len(self.bayesian_layers))
+            print(f"        Bayesian set to True, Bayesian layers: ", len(self.bayesian_layers))
 
     def build_embeddings(self):
 
@@ -90,12 +84,12 @@ class CFM(nn.Module):
                 size_out=self.embed_c_dim
             )
             n_params = sum(p.numel() for p in self.c_embedding.parameters() if p.requires_grad)
-            print(f"c_embedding: Subnet with {n_params} parameters to {self.embed_c_dim} dimensions")
+            print(f"        c_embedding: Subnet with {n_params} parameters to {self.embed_c_dim} dimensions")
         else:
             self.embed_c_dim = self.dims_c
             params["embed_c_dim"] = self.dims_c
             self.c_embedding = nn.Identity()
-            print("c_embedding: None")
+            print(f"        c_embedding: None")
 
         embed_x = params.get("embed_x", False)
         if embed_x:
@@ -106,12 +100,12 @@ class CFM(nn.Module):
                 size_out=self.embed_x_dim
             )
             n_params = sum(p.numel() for p in self.x_embedding.parameters() if p.requires_grad)
-            print(f"x_embedding: Subnet with {n_params} parameters to {self.embed_x_dim} dimensions")
+            print(f"        x_embedding: Subnet with {n_params} parameters to {self.embed_x_dim} dimensions")
         else:
             self.embed_x_dim = self.dims_in
             params["embed_x_dim"] = self.dims_in
             self.x_embedding = nn.Identity()
-            print("x_embedding: None")
+            print(f"        x_embedding: None")
 
         embed_t = params.get("embed_t", False)
         if embed_t:
@@ -128,12 +122,12 @@ class CFM(nn.Module):
             else:
                 self.t_embedding = nn.Linear(1, self.embed_t_dim)
             n_params = sum(p.numel() for p in self.t_embedding.parameters() if p.requires_grad)
-            print(f"t_embedding: Mode {embed_t_mode} with {n_params} parameters to {self.embed_t_dim} dimensions")
+            print(f"        t_embedding: Mode {embed_t_mode} with {n_params} parameters to {self.embed_t_dim} dimensions")
         else:
             self.embed_t_dim = 1
             params["embed_t_dim"] = 1
             self.t_embedding = nn.Identity()
-            print("t_embedding: None")
+            print(f"        t_embedding: None")
 
     def build_distributions(self):
 
@@ -143,28 +137,28 @@ class CFM(nn.Module):
             self.beta_dist_b = self.params.get("beta_dist_b", 0.7)
             self.t_dist = torch.distributions.beta.Beta(concentration1=float(self.beta_dist_a),
                                                         concentration0=float(self.beta_dist_b))
-            print(f"t distribution: beta distribution with params {self.beta_dist_a, self.beta_dist_b}")
+            print(f"        t distribution: beta distribution with params {self.beta_dist_a, self.beta_dist_b}")
         else:
             self.t_dist = torch.distributions.uniform.Uniform(low=0, high=1)
             self.mod_t = self.params.get("mod_t", False)
-            print(f"t distribution: uniform")
+            print(f"        t distribution: uniform")
 
         self.latent_space = self.params.get("latent_space", "gaussian")
         if self.latent_space == "gaussian":
             self.latent_dist = torch.distributions.multivariate_normal.MultivariateNormal(
                 torch.zeros(self.dims_in), torch.eye(self.dims_in))
-            print("latent space: gaussian")
+            print(f"        latent space: gaussian")
         elif self.latent_space == "uniform":
             uniform_bounds = self.params.get("uniform_bounds", [0., 1.])
             self.latent_dist = torch.distributions.uniform.Uniform(
                 torch.full((self.dims_in, ), uniform_bounds[0]), torch.full((self.dims_in, ), uniform_bounds[1]))
-            print(f"latent space: uniform with bounds {uniform_bounds}")
+            print(f"        latent space: uniform with bounds {uniform_bounds}")
         elif self.latent_space == "mixture":
             self.uniform_channels = self.params.get("uniform_channels")
             self.normal_channels = [i for i in range(self.dims_in) if i not in self.uniform_channels]
             self.latent_dist = MixtureDistribution(normal_channels=self.normal_channels,
                                                    uniform_channels=self.uniform_channels)
-            print(f"latent space: mixture with uniform channels {self.uniform_channels}")
+            print(f"        latent space: mixture with uniform channels {self.uniform_channels}")
 
 
     def latent_log_prob(self, z: torch.Tensor) -> Union[torch.Tensor, float]:

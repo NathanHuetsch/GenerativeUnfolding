@@ -63,10 +63,10 @@ class Documenter:
         """
         self.run_name = run_name
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        base_dir_parts = [script_dir, "..", "..", "output"]
-        if run_folder is not None:
-            base_dir_parts.append(run_folder)
         if existing_run is None:
+            base_dir_parts = [script_dir, "..", "..", "output"]
+            if run_folder is not None:
+                base_dir_parts.append(run_folder)
             now = datetime.now()
             while True:
                 full_run_name = now.strftime("%Y%m%d_%H%M%S") + "_" + run_name
@@ -77,6 +77,7 @@ class Documenter:
                 except FileExistsError:
                     now += timedelta(seconds=1)
         else:
+            base_dir_parts = [script_dir, "..", ".."]
             self.basedir = os.path.join(*base_dir_parts, existing_run)
 
         if not read_only:

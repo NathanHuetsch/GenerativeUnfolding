@@ -7,8 +7,9 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.backends.backend_pdf import PdfPages
 import torch
-
+from .utils import GetEMD, get_triangle_distance, get_normalisation_weight
 from ..processes.observables import Observable
+import yaml
 
 
 @dataclass
@@ -258,7 +259,6 @@ class Plots:
         Args:
             file: Output file name
         """
-        n_events = 5
 
         with PdfPages(file) as pp:
             for obs, bins, data_true, data_gen in zip(
@@ -489,3 +489,76 @@ class Plots:
             transform=ax.transAxes,
             color="none",
         )
+
+    def plot_migration(self, file: str, gt_hard=False):
+        if gt_hard:
+            obs_hard = self.obs_hard
+            name_hard = "Hard"
+        else:
+            obs_hard = self.obs_gen_single
+            name_hard = "Unfold"
+        cmap = plt.get_cmap('viridis')
+        cmap.set_bad("white")
+        with PdfPages(file) as pp:
+            for obs, bins, data_reco, data_hard in zip(
+                self.observables, self.bins, self.obs_reco, obs_hard
+                    ):
+                plt.hist2d(data_reco, data_hard, density=True, bins=bins, rasterized=True, cmap=cmap, norm=mpl.colors.LogNorm())
+                unit = "" if obs.unit is None else f" [{obs.unit}]"
+                plt.title(f"${{{obs.tex_label}}}${unit}")
+                plt.xlabel("Reco")
+                plt.ylabel(name_hard)
+                plt.xlim(bins[0], bins[-1])
+                plt.ylim(bins[0], bins[-1])
+                plt.colorbar()
+                plt.savefig(pp, format="pdf", bbox_inches="tight")
+                plt.close()
+
+    def plot_migration2(self, file: str, gt_hard=False):
+        if gt_hard:
+            obs_hard = self.obs_hard
+            name_hard = "Hard"
+        else:
+            obs_hard = self.obs_gen_single
+            name_hard = "Unfold"
+        cmap = plt.get_cmap('viridis')
+        cmap.set_bad("white")
+        with PdfPages(file) as pp:
+            for obs, bins, data_reco, data_hard in zip(
+                self.observables, self.bins, self.obs_reco, obs_hard
+                    ):
+                cmap = plt.get_cmap('viridis')
+                cmap.set_bad("white")
+                h, x, y = np.histogram2d(data_hard, data_reco, bins=(bins, bins))
+                h = np.ma.divide(h, np.sum(h, -1, keepdims=True)).filled(0)
+                h[h == 0] = np.nan
+                plt.pcolormesh(bins, bins, h, cmap=cmap)
+                plt.colorbar()
+
+                unit = "" if obs.unit is None else f" [{obs.unit}]"
+                plt.title(f"${{{obs.tex_label}}}${unit}")
+                plt.xlim(bins[0], bins[-1])
+                plt.ylim(bins[0], bins[-1])
+                plt.xlabel("Reco")
+                plt.ylabel(name_hard)
+
+                plt.savefig(pp, format="pdf", bbox_inches="tight")
+                plt.close()
+
+
+    def evaluate_metrics(self, file: str):
+        result_dict = {}
+        for i, obs in enumerate(self.observables):
+            x_gen = self.obs_gen_single[i]
+            x_true = self.obs_hard[i]
+            bins = self.bins[i]
+
+            emd_mean, emd_std, _ = GetEMD(x_true, x_gen, bins, nboot=10)
+            triangle_dist = get_triangle_distance(x_true, x_gen, bins, make_hist=True)
+
+            result_dict[f"{obs.tex_label}_emd_mean"] = float(emd_mean)
+            result_dict[f"{obs.tex_label}_emd_std"] = float(emd_std)
+            result_dict[f"{obs.tex_label}_triangle_dist"] = float(triangle_dist)
+
+        with open(file, "w") as f:
+            yaml.dump(result_dict, f)

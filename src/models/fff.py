@@ -19,7 +19,7 @@ class FreeFormFlow(nn.Module):
     Class implementing a conditional CFM model
     """
 
-    def __init__(self, dims_in: int, dims_c: int, params: dict):
+    def __init__(self, params: dict):
         """
         Initializes and builds the conditional CFM
 
@@ -30,8 +30,8 @@ class FreeFormFlow(nn.Module):
         """
         super().__init__()
         self.params = params
-        self.dims_in = dims_in
-        self.dims_c = dims_c
+        self.dims_in = params["dims_in"]
+        self.dims_c = params["dims_c"]
         self.bayesian = params.get("bayesian", False)
         self.bayesian_samples = params.get("bayesian_samples", 20)
         self.bayesian_layers = []

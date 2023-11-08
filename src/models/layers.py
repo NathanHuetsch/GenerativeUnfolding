@@ -122,14 +122,14 @@ class Subnet(nn.Module):
             conditional=True
     ):
         super().__init__()
-
-
         network_params = params.get("network_params")
         embed_x_dim = network_params.get("embed_x_dim", params["dims_in"])
         embed_c_dim = network_params.get("embed_c_dim", params["dims_c"])
         embed_t_dim = network_params.get("embed_t_dim", 1)
 
         self.conditional = conditional
+        if not conditional:
+            embed_c_dim = 0
 
         num_layers = network_params.get("n_layers", 3)
         internal_size = network_params.get("internal_size", 3)
@@ -559,9 +559,9 @@ class ODEsolver(nn.Module):
         self.time_intervall_backward = torch.tensor([t_max, t_min])
         
         if self.method == "dopri5":
-            print(f"ODE solver: {self.method}, atol {self.atol}, rtol {self.rtol}, t {[t_min, t_max]}", flush=True)
+            print(f"        ODE solver: {self.method}, atol {self.atol}, rtol {self.rtol}, t {[t_min, t_max]}", flush=True)
         else:
-            print(f"ODE solver: {self.method}, step_size {self.step_size}, t {[t_min, t_max]}", flush=True)
+            print(f"        ODE solver: {self.method}, step_size {self.step_size}, t {[t_min, t_max]}", flush=True)
 
     def forward(self, function, x_initial, reverse=False):
         with warnings.catch_warnings():
@@ -577,7 +577,7 @@ class ODEsolver(nn.Module):
                     options=dict(step_size=self.step_size)
                 )
             except AssertionError:
-                warnings.warn(f"Integration with {self.method} failed, trying with RK4")
+                warnings.warn(f"    Integration with {self.method} failed, trying with RK4")
                 x_t = odeint(
                     func=function,
                     y0=x_initial,
@@ -607,3 +607,4 @@ class MixtureDistribution(torch.distributions.distribution.Distribution):
         samples[:, self.uniform_channels] = self.uniform.sample(n)
         samples[:, self.normal_channels] = self.normal.sample(n)
         return samples
+

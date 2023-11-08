@@ -7,6 +7,7 @@ import os
 import torch
 from ..models.inn import INN
 from ..models.cfm import CFM, CFMwithTransformer
+from ..models.didi import DirectDiffusion
 from ..models.transfermer import Transfermer
 from ..models.transfusion import TransfusionAR, TransfusionParallel
 from ..models.fff import FreeFormFlow
@@ -28,8 +29,6 @@ class Model:
         verbose: bool,
         device: torch.device,
         model_path: str,
-        dims_in: tuple[int, ...],
-        dims_c: tuple[int, ...],
         state_dict_attrs: list[str],
     ):
         """
@@ -50,14 +49,16 @@ class Model:
         self.verbose = verbose
         self.is_classifier = False
         model = params.get("model", "INN")
+        print(f"    Model class: {model}")
         try:
-            self.model = eval(model)(dims_in[0], dims_c[0], params)
+            self.model = eval(model)(params)
         except NameError:
+            print(model)
             raise NameError("model not recognised. Use exact class name")
         self.model.to(device)
 
         n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        print(f"  Trainable parameters: {n_params}")
+        print(f"    Total trainable parameters: {n_params}")
         #if hasattr(torch, "compile"):
         #    print("  Compiling model")
         #    self.mode = torch.compile(self.model)
@@ -72,23 +73,25 @@ class Model:
         input_train, input_val, input_test = input_data
         cond_train, cond_val, cond_test = cond_data
         self.n_train_samples = len(input_train)
-        bs = self.params.get("batch_size")
-        bs_sample = self.params.get("batch_size_sample", bs)
-        train_loader_kwargs = {"shuffle": True}
-        val_loader_kwargs = {"shuffle": False}
+        self.n_val_samples = len(input_val)
+        self.bs = self.params.get("batch_size")
+        self.bs_sample = self.params.get("batch_size_sample", self.bs)
+        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": True}
+        val_loader_kwargs = {"shuffle": False, "batch_size": self.bs_sample, "drop_last": False}
 
-        self.train_loader = self.get_loader(
-            input_train, cond_train, batch_size=bs, drop_last=True, **train_loader_kwargs
+        self.train_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_train.float(), cond_train.float()),
+            **train_loader_kwargs,
         )
-        self.val_loader = self.get_loader(
-            input_val, cond_val, batch_size=bs_sample, drop_last=True, **val_loader_kwargs
+        self.val_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_val.float(), cond_val.float()),
+            **val_loader_kwargs,
         )
-        self.test_loader = self.get_loader(
-            input_test, cond_test, batch_size=bs_sample, shuffle=False, drop_last=False
+        self.test_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_test.float(), cond_test.float()),
+            **val_loader_kwargs,
         )
         format_dim = lambda shape: shape[0] if len(shape) == 1 else (*shape,)
-        print(f"  Input dimension: {format_dim(input_train.shape[1:])}")
-        print(f"  Condition dimension: {format_dim(cond_train.shape[1:])}")
 
     def progress(self, iterable, **kwargs):
         """
@@ -116,27 +119,6 @@ class Model:
             tqdm.write(text)
         else:
             print(text, flush=True)
-
-    def get_loader(
-        self,
-        input_data: torch.Tensor,
-        cond_data: torch.Tensor,
-        **loader_kwargs,
-    ) -> torch.utils.data.DataLoader:
-        """
-        Constructs a DataSet and DataLoader for the given input and condition data
-
-        Args:
-            input_data: Tensor with input data, shape (n_events, dims_in)
-            cond_data: Tensor with condition data, shape (n_events, dims_c)
-            kwargs: keyword arguments passed to the data loader
-        Returns:
-            Constructed DataLoader
-        """
-        return torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(input_data.float(), cond_data.float()),
-            **loader_kwargs,
-        )
 
     def init_optimizer(self):
         """
@@ -240,7 +222,7 @@ class Model:
                 self.save("final" if checkpoint_overwrite else f"epoch_{epoch}")
 
             self.print(
-                f"  Epoch {epoch}: "
+                f"    Epoch {epoch}: "
                 + ", ".join(
                     [
                         f"{name} = {loss[-1]:{'.2e' if name == 'lr' else '.6f'}}"
@@ -252,7 +234,7 @@ class Model:
 
         self.save("final")
         time_diff = timedelta(seconds=round(time.time() - start_time))
-        print(f"  Training completed after {time_diff}")
+        print(f"    Training completed after {time_diff}")
 
     def dataset_loss(self, loader: torch.utils.data.DataLoader) -> dict:
         """
@@ -337,10 +319,10 @@ class Model:
                             data_batches.append(self.model.sample(cs)[0])
                             break
                         except AssertionError:
-                            print("Batch failed, repeating")
+                            print(f"    Batch failed, repeating")
                 all_samples.append(torch.cat(data_batches, dim=0))
                 if self.model.bayesian:
-                    print(f"Finished bayesian sample {i} in {time.time() - t0}", flush=True)
+                    print(f"    Finished bayesian sample {i} in {time.time() - t0}", flush=True)
             all_samples = torch.stack(all_samples, dim=0)
             if self.model.bayesian:
                 return all_samples
@@ -431,7 +413,7 @@ class Model:
         self.losses = state_dicts["losses"]
 
 
-class UnfoldingModel(Model):
+class GenerativeUnfolding(Model):
     def __init__(
         self,
         params: dict,
@@ -441,30 +423,30 @@ class UnfoldingModel(Model):
         process: Process
     ):
         self.process = process
-        self.hard_pp = build_preprocessing(params["hard_preprocessing"], n_dim=6)
-        self.reco_pp = build_preprocessing(params["reco_preprocessing"], n_dim=6)
+
+        self.hard_pp = build_preprocessing(params["hard_preprocessing"], n_dim=params["dims_c"])
+        self.reco_pp = build_preprocessing(params["reco_preprocessing"], n_dim=params["dims_in"])
         self.hard_pp.to(device)
         self.reco_pp.to(device)
-        self.latent_dimension = self.hard_pp.output_shape[0] #TODO: do this properly!!!!!
+        self.latent_dimension = self.hard_pp.output_shape[0]
 
         super().__init__(
             params,
             verbose,
             device,
             model_path,
-            self.hard_pp.output_shape,
-            (
-                *self.reco_pp.output_shape[:-1],
-                self.reco_pp.output_shape[-1],
-            ),
             state_dict_attrs=["hard_pp", "reco_pp"],
         )
 
-    def init_data_loaders(self, data: tuple[ProcessData, ...]):
-        self.data_train, _, _ = data
-        self.hard_pp.init_normalization(self.data_train.x_hard)
+    def init_data_loaders(self):
+        data = (
+        self.process.get_data("train"),
+        self.process.get_data("val"),
+        self.process.get_data("test"),
+        )
+        self.hard_pp.init_normalization(data[0].x_hard)
         input_data = tuple(self.hard_pp(subset.x_hard) for subset in data)
-        self.reco_pp.init_normalization(self.data_train.x_reco)
+        self.reco_pp.init_normalization(data[0].x_reco)
         cond_data = tuple(self.reco_pp(subset.x_reco) for subset in data)
         super().init_data_loaders(input_data, cond_data)
 
@@ -523,3 +505,64 @@ class UnfoldingModel(Model):
             return x_hard.reshape(n_samples, -1, *x_hard.shape[1:]), torch.exp(
                 log_prob - jac
             )
+
+
+class UnpairedUnfolding(GenerativeUnfolding):
+    def __init__(
+        self,
+        params: dict,
+        verbose: bool,
+        device: torch.device,
+        model_path: str,
+        process: Process
+    ):
+        self.process = process
+        self.hard_pp = build_preprocessing(params["hard_preprocessing"], n_dim=6)
+        self.reco_pp = build_preprocessing(params["reco_preprocessing"], n_dim=6)
+        self.hard_pp.to(device)
+        self.reco_pp.to(device)
+        self.latent_dimension = self.hard_pp.output_shape[0]
+
+        super().__init__(
+            params,
+            verbose,
+            device,
+            model_path,
+            process,
+        )
+
+    def init_data_loaders(self):
+        data = (
+        self.process.get_data("train"),
+        self.process.get_data("val"),
+        self.process.get_data("test"),
+        )
+        self.hard_pp.init_normalization(data[0].x_hard)
+        self.input_data_preprocessed = tuple(self.hard_pp(subset.x_hard) for subset in data)
+        self.reco_pp.init_normalization(data[0].x_reco)
+        self.cond_data_preprocessed = tuple(self.reco_pp(subset.x_reco) for subset in data)
+        super(GenerativeUnfolding, self).init_data_loaders(self.input_data_preprocessed, self.cond_data_preprocessed)
+
+    def begin_epoch(self):
+        # The only difference between paired and unpaired is shuffling the condition data each epoch
+        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": True}
+        val_loader_kwargs = {"shuffle": False, "batch_size": self.bs_sample, "drop_last": False}
+
+        permutation_train = torch.randperm(self.n_train_samples)
+        permutation_val = torch.randperm(self.n_val_samples)
+
+        input_train = self.input_data_preprocessed[0]
+        cond_train = self.cond_data_preprocessed[0][permutation_train]
+        input_val = self.input_data_preprocessed[1]
+        cond_val = self.cond_data_preprocessed[1][permutation_val]
+
+        self.train_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_train.float(), cond_train.float()),
+            **train_loader_kwargs,
+        )
+        self.val_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_val.float(), cond_val.float()),
+            **val_loader_kwargs,
+        )
+
+

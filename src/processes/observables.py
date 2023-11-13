@@ -89,7 +89,7 @@ def momenta_to_observables(
             tex_label=r"\text{Jet mass } m",
             unit="GeV",
             bins=lambda obs: get_hardcoded_bins(
-                obs, n_bins=n_bins, lower=0, upper=60
+                obs, n_bins=n_bins, lower=1, upper=60
             ),
             yscale="linear",
         )
@@ -97,16 +97,6 @@ def momenta_to_observables(
     observables.append(
         Observable(
             compute=lambda p: nanify(p[..., :], p[..., 1]),
-            tex_label=r"\text{Jet multiplicity } N",
-            bins=lambda obs: get_integer_bins(
-                obs, lower=0, upper=60
-            ),
-            yscale="linear",
-        )
-    )
-    observables.append(
-        Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 2]),
             tex_label=r"\text{Jet width } w",
             bins=lambda obs: get_hardcoded_bins(
                 obs, n_bins=n_bins, lower=0., upper=0.6
@@ -116,17 +106,20 @@ def momenta_to_observables(
     )
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 3]),
-            tex_label=r"\text{N-subjettiness ratio } \tau_{21}",
-            bins=lambda obs: get_hardcoded_bins(
-                obs, n_bins=n_bins, lower=0., upper=1.2
+            compute=lambda p: nanify(p[..., :], p[..., 2]),
+            tex_label=r"\text{Jet multiplicity } N",
+            bins=lambda obs: get_integer_bins(
+                obs, lower=4, upper=60
             ),
+            #bins=lambda obs: get_hardcoded_bins(
+            #    obs, n_bins=200, lower=0, upper=60
+            #),
             yscale="linear",
         )
     )
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 4]),
+            compute=lambda p: nanify(p[..., :], p[..., 3]),
             tex_label=r"\text{Groomed mass }\log \rho",
             unit="GeV",
             bins=lambda obs: get_hardcoded_bins(
@@ -137,12 +130,22 @@ def momenta_to_observables(
     )
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 5]),
+            compute=lambda p: nanify(p[..., :], p[..., 4]),
             tex_label=r"\text{Groomed momentum fraction }z_g",
             bins=lambda obs: get_hardcoded_bins(
                 obs, n_bins=n_bins, lower=0.05, upper=0.55
             ),
             yscale="log",
+        )
+    )
+    observables.append(
+        Observable(
+            compute=lambda p: nanify(p[..., :], p[..., 5]),
+            tex_label=r"\text{N-subjettiness ratio } \tau_{21}",
+            bins=lambda obs: get_hardcoded_bins(
+                obs, n_bins=n_bins, lower=0.1, upper=1.1
+            ),
+            yscale="linear",
         )
     )
 

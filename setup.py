@@ -14,7 +14,8 @@ requirements = ["numpy",
                 "pyyaml",
                 "tqdm",
                 "torchdiffeq",
-                "matplotlib"]
+                "matplotlib",
+                "torchsde"]
 
 setup(
     name="GenerativeUnfolding",

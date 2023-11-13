@@ -9,7 +9,7 @@ from .layers import *
 from .cfm import CFM
 
 
-class DirectDiffusion(nn.Module):
+class DirectDiffusion(CFM):
     """
     Class implementing a conditional CFM model
     """
@@ -23,7 +23,7 @@ class DirectDiffusion(nn.Module):
             dims_c: dimension of condition
             params: dictionary with architecture/hyperparameters
         """
-        super().__init__()
+        super(CFM, self).__init__()
         self.params = params
         self.dims_in = params["dims_in"]
         #self.dims_c = params["dims_c"]
@@ -34,7 +34,12 @@ class DirectDiffusion(nn.Module):
         self.bayesian_factor = params.get("bayesian_factor", 1)
 
         self.ODEsolver = ODEsolver(params=params.get("ODE_params", {}))
+        t_noise_scale = params.get("t_noise_scale", 0)
+        minimum_noise_scale = params.get("minimum_noise_scale", 0)
+        self.trajectory = LinearTrajectory(t_noise_scale=t_noise_scale,
+                                           minimum_noise_scale=minimum_noise_scale)
 
+        self.build_embeddings()
         self.build_net()
         self.build_distributions()
 
@@ -44,75 +49,6 @@ class DirectDiffusion(nn.Module):
 
         self.loss_fct = nn.MSELoss()
 
-        self.add_noise = self.params.get("add_noise", False)
-        if self.add_noise:
-            self.add_noise_scale = self.params.get("add_noise_scale", 1.e-4)
-            print(f"        add noise: True with scale {self.add_noise_scale}")
-
-    def build_net(self):
-        """
-        Construct the Network
-        """
-        self.build_embeddings()
-        # Build the main network
-        network = self.params["network_params"].get("network_class", Subnet)
-        self.net = eval(network)(params=self.params, conditional=self.dims_c > 0)
-        n_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
-        print(f"        Network: {network} with {n_params} parameters")
-
-        if self.bayesian:
-            if isinstance(self.net, Subnet):
-                self.bayesian_layers.extend(
-                    layer for layer in self.net.layer_list if isinstance(layer, VBLinear)
-                )
-            else:
-                #for block in self.net.blocks:
-                #    self.bayesian_layers.extend(
-                #        layer for layer in block.layer_list if isinstance(layer, VBLinear)
-                #    )
-                raise ValueError("Bayesian only implemented for Subnet atm")
-            print(f"        Bayesian set to True, Bayesian layers: ", len(self.bayesian_layers))
-
-    def build_embeddings(self):
-
-        params = self.params["network_params"]
-        embed_x = params.get("embed_x", False)
-        if embed_x:
-            self.embed_x_dim = params.get("embed_x_dim", self.dims_in)
-            self.x_embedding = EmbeddingNet(
-                params=params.get("embed_x_params"),
-                size_in=self.dims_in,
-                size_out=self.embed_x_dim
-            )
-            n_params = sum(p.numel() for p in self.x_embedding.parameters() if p.requires_grad)
-            print(f"        x_embedding: Subnet with {n_params} parameters to {self.embed_x_dim} dimensions")
-        else:
-            self.embed_x_dim = self.dims_in
-            params["embed_x_dim"] = self.dims_in
-            self.x_embedding = nn.Identity()
-            print(f"        x_embedding: None")
-
-        embed_t = params.get("embed_t", False)
-        if embed_t:
-            self.embed_t_dim = params.get("embed_t_dim", self.dims_in)
-            embed_t_mode = params.get("embed_t_mode", "linear")
-            if embed_t_mode == "gfprojection":
-                self.t_embedding = nn.Sequential(
-                    GaussianFourierProjection(embed_dim=self.embed_t_dim),
-                    nn.Linear(self.embed_t_dim, self.embed_t_dim))
-            elif embed_t_mode == "sinusoidal":
-                self.t_embedding = nn.Sequential(
-                    sinusoidal_t_embedding(embed_dim=self.embed_t_dim),
-                    nn.Linear(self.embed_t_dim, self.embed_t_dim))
-            else:
-                self.t_embedding = nn.Linear(1, self.embed_t_dim)
-            n_params = sum(p.numel() for p in self.t_embedding.parameters() if p.requires_grad)
-            print(f"        t_embedding: Mode {embed_t_mode} with {n_params} parameters to {self.embed_t_dim} dimensions")
-        else:
-            self.embed_t_dim = 1
-            params["embed_t_dim"] = 1
-            self.t_embedding = nn.Identity()
-            print(f"        t_embedding: None")
 
     def build_distributions(self):
 
@@ -147,14 +83,18 @@ class DirectDiffusion(nn.Module):
             v = self.net(t, x_t)
             return v
 
-        if self.add_noise:
-            x_1 = x_1 + self.add_noise_scale*torch.randn_like(x_1, device=device, dtype=dtype)
-
         with torch.no_grad():
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
             x_t = self.ODEsolver(net_wrapper, x_1, reverse=True)
         # return the generated sample. This function does not calculate jacobians and just returns a 0 instead
         return x_t[-1], torch.Tensor([0])
+
+
+    def sample_with_probs(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        raise NotImplementedError("Direct Diffusion does not allow likelihood calculation")
+
+    def log_prob(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError("Direct Diffusion does not allow likelihood calculation")
 
     def batch_loss(
         self, x_0: torch.Tensor, x_1: torch.Tensor, kl_scale: float = 0.0
@@ -178,12 +118,8 @@ class DirectDiffusion(nn.Module):
         else:
             t = torch.rand((x_0.size(0), 1), dtype=x_0.dtype, device=x_0.device)
 
-        # Calculate x_t along the trajectory
-        x_t = (1 - t) * x_0 + t * x_1
-        if self.add_noise:
-            x_t = x_t + torch.randn_like(x_t, device=x_0.device, dtype=x_0.dtype) * self.add_noise_scale
-        # Calculate the derivative of x_t, i.e. the conditional velocity
-        x_t_dot = -x_0 + x_1
+        # Calculate x_t along the trajectory and the derivative x_t_dot
+        x_t, x_t_dot = self.trajectory(x_0, x_1, t)
         # Predict the velocity
         t = self.t_embedding(t)
         x_t = self.x_embedding(x_t)
@@ -213,48 +149,3 @@ class DirectDiffusion(nn.Module):
                 "loss": loss.item(),
             }
         return loss, loss_terms
-
-    def kl(self) -> torch.Tensor:
-        """
-        Compute the KL divergence between weight prior and posterior
-
-        Returns:
-            Scalar tensor with KL divergence
-        """
-        assert self.bayesian
-        return sum(layer.kl() for layer in self.bayesian_layers)
-
-    def reset_random_state(self):
-        """
-        Resets the random state of the Bayesian layers
-        """
-        assert self.bayesian
-        for layer in self.bayesian_layers:
-            layer.reset_random()
-
-    def sample_random_state(self) -> list[np.ndarray]:
-        """
-        Sample new random states for the Bayesian layers and return them as a list
-
-        Returns:
-            List of numpy arrays with random states
-        """
-        assert self.bayesian
-        return [layer.sample_random_state() for layer in self.bayesian_layers]
-
-    def import_random_state(self, states: list[np.ndarray]):
-        """
-        Import a list of random states into the Bayesian layers
-
-        Args:
-            states: List of numpy arrays with random states
-        """
-        assert self.bayesian
-        for layer, s in zip(self.bayesian_layers, states):
-            layer.import_random_state(s)
-
-    def generate_random_state(self):
-        """
-        Generate and save a set of random states for repeated use
-        """
-        self.random_states = [self.sample_random_state() for i in range(self.bayesian_samples)]

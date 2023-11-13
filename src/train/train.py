@@ -444,11 +444,15 @@ class GenerativeUnfolding(Model):
         self.process.get_data("val"),
         self.process.get_data("test"),
         )
-        self.hard_pp.init_normalization(data[0].x_hard)
-        input_data = tuple(self.hard_pp(subset.x_hard) for subset in data)
-        self.reco_pp.init_normalization(data[0].x_reco)
-        cond_data = tuple(self.reco_pp(subset.x_reco) for subset in data)
-        super().init_data_loaders(input_data, cond_data)
+        if self.params.get("joint_normalization", False):
+            self.hard_pp.init_normalization(data[0].x_hard)
+            self.reco_pp.init_normalization(data[0].x_hard)
+        else:
+            self.hard_pp.init_normalization(data[0].x_hard)
+            self.reco_pp.init_normalization(data[0].x_reco)
+        self.input_data_preprocessed = tuple(self.hard_pp(subset.x_hard) for subset in data)
+        self.cond_data_preprocessed = tuple(self.reco_pp(subset.x_reco) for subset in data)
+        super(GenerativeUnfolding, self).init_data_loaders(self.input_data_preprocessed, self.cond_data_preprocessed)
 
     def predict(self, loader=None) -> torch.Tensor:
         """
@@ -530,18 +534,6 @@ class UnpairedUnfolding(GenerativeUnfolding):
             model_path,
             process,
         )
-
-    def init_data_loaders(self):
-        data = (
-        self.process.get_data("train"),
-        self.process.get_data("val"),
-        self.process.get_data("test"),
-        )
-        self.hard_pp.init_normalization(data[0].x_hard)
-        self.input_data_preprocessed = tuple(self.hard_pp(subset.x_hard) for subset in data)
-        self.reco_pp.init_normalization(data[0].x_reco)
-        self.cond_data_preprocessed = tuple(self.reco_pp(subset.x_reco) for subset in data)
-        super(GenerativeUnfolding, self).init_data_loaders(self.input_data_preprocessed, self.cond_data_preprocessed)
 
     def begin_epoch(self):
         # The only difference between paired and unpaired is shuffling the condition data each epoch

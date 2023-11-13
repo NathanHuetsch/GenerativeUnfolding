@@ -31,10 +31,15 @@ class CFM(nn.Module):
         self.bayesian_layers = []
         self.bayesian_factor = params.get("bayesian_factor", 1)
 
-        self.ODEsolver = ODEsolver(params = params.get("ODE_params", {}))
+        t_noise_scale = params.get("t_noise_scale", 0)
+        minimum_noise_scale = params.get("minimum_noise_scale", 0)
+        self.trajectory = LinearTrajectory(t_noise_scale=t_noise_scale,
+                                           minimum_noise_scale=minimum_noise_scale)
 
+        self.build_embeddings()
         self.build_net()
         self.build_distributions()
+        self.build_solver()
 
         self.l2_regularization = self.params.get("l2_regularization", False)
         if self.l2_regularization:
@@ -42,19 +47,13 @@ class CFM(nn.Module):
 
         self.loss_fct = nn.MSELoss()
 
-        self.add_noise = self.params.get("add_noise", False)
-        if self.add_noise:
-            self.add_noise_scale = self.params.get("add_noise_scale", 1.e-4)
-            print(f"        add noise: True with scale {self.add_noise_scale}")
-
     def build_net(self):
         """
         Construct the Network
         """
-        self.build_embeddings()
         # Build the main network
         network = self.params["network_params"].get("network_class", Subnet)
-        self.net = eval(network)(params=self.params)
+        self.net = eval(network)(params=self.params, conditional=self.dims_c > 0)
         n_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
         print(f"        Network: {network} with {n_params} parameters")
 
@@ -68,28 +67,30 @@ class CFM(nn.Module):
                 #    self.bayesian_layers.extend(
                 #        layer for layer in block.layer_list if isinstance(layer, VBLinear)
                 #    )
-                raise ValueError("Bayesian only implemented for Subnet atm")
+                raise NotImplementedError("Bayesian only implemented for Subnet atm")
             print(f"        Bayesian set to True, Bayesian layers: ", len(self.bayesian_layers))
 
     def build_embeddings(self):
 
         params = self.params["network_params"]
-        embed_c = params.get("embed_c", False)
-        if embed_c:
-            self.embed_c_dim = params.get("embed_c_dim", self.dims_c)
-            # Build the c embedding network if used
-            self.c_embedding = EmbeddingNet(
-                params=params.get("embed_c_params"),
-                size_in= self.dims_c,
-                size_out=self.embed_c_dim
-            )
-            n_params = sum(p.numel() for p in self.c_embedding.parameters() if p.requires_grad)
-            print(f"        c_embedding: Subnet with {n_params} parameters to {self.embed_c_dim} dimensions")
-        else:
-            self.embed_c_dim = self.dims_c
-            params["embed_c_dim"] = self.dims_c
-            self.c_embedding = nn.Identity()
-            print(f"        c_embedding: None")
+
+        if self.dims_c > 0:
+            embed_c = params.get("embed_c", False)
+            if embed_c:
+                self.embed_c_dim = params.get("embed_c_dim", self.dims_c)
+                # Build the c embedding network if used
+                self.c_embedding = EmbeddingNet(
+                    params=params.get("embed_c_params"),
+                    size_in= self.dims_c,
+                    size_out=self.embed_c_dim
+                )
+                n_params = sum(p.numel() for p in self.c_embedding.parameters() if p.requires_grad)
+                print(f"        c_embedding: Subnet with {n_params} parameters to {self.embed_c_dim} dimensions")
+            else:
+                self.embed_c_dim = self.dims_c
+                params["embed_c_dim"] = self.dims_c
+                self.c_embedding = nn.Identity()
+                print(f"        c_embedding: None")
 
         embed_x = params.get("embed_x", False)
         if embed_x:
@@ -160,6 +161,15 @@ class CFM(nn.Module):
                                                    uniform_channels=self.uniform_channels)
             print(f"        latent space: mixture with uniform channels {self.uniform_channels}")
 
+    def build_solver(self):
+
+        self.solver_type = self.params.get("solver", "ODE")
+        if self.solver_type == "ODE":
+            self.solver = ODEsolver(params=self.params.get("solver_params", {}))
+        else:
+            self.solver = SDEsolver(params=self.params.get("solver_params", {}))
+            #self.SDE = SDE(self)
+
 
     def latent_log_prob(self, z: torch.Tensor) -> Union[torch.Tensor, float]:
         """
@@ -213,7 +223,7 @@ class CFM(nn.Module):
         states = (x, logp_diff_1)
         c = self.c_embedding(c.requires_grad_(False))
         # Solve the ODE from t=0 to t=1 from data to noise
-        x_t, logp_diff_t = self.ODEsolver(net_wrapper, states)
+        x_t, logp_diff_t = self.solver(net_wrapper, states)
         # Extract the latent space points and the jacobians
         x_1 = x_t[-1].detach()
         jac = logp_diff_t[-1].detach()
@@ -233,18 +243,21 @@ class CFM(nn.Module):
         device = c.device
 
         # Wrap the network such that the ODE solver can call it
-        def net_wrapper(t, x_t):
-            x_t = self.x_embedding(x_t)
-            t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
-            v = self.net(t, x_t, c)
-            return v
+        if self.solver_type == "ODE":
+            def net_wrapper(t, x_t):
+                x_t = self.x_embedding(x_t)
+                t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
+                v = self.net(t, x_t, c)
+                return v
+        else:
+            net_wrapper = SDE_wrapper(self, c)
 
         with torch.no_grad():
             c = self.c_embedding(c)
             # Sample from the latent distribution
             x_1 = self.latent_dist.sample((batch_size, )).to(device, dtype=dtype)
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
-            x_t = self.ODEsolver(net_wrapper, x_1, reverse=True)
+            x_t = self.solver(net_wrapper, x_1, reverse=True)
         # return the generated sample. This function does not calculate jacobians and just returns a 0 instead
         return x_t[-1], torch.Tensor([0])
 
@@ -281,21 +294,11 @@ class CFM(nn.Module):
         states = (x_1, logp_diff_1)
         c = self.c_embedding(c.requires_grad_(False))
         # Solve the ODE from t=1 to t=0 from the sampled initial condition
-        x_t, logp_diff_t = self.ODEsolver(net_wrapper, states, reverse=True)
+        x_t, logp_diff_t = self.solver(net_wrapper, states, reverse=True)
         # Extract the generated samples and the jacobians
         x_0 = x_t[-1].detach()
         jac = logp_diff_t[-1].detach()
         return x_0, self.latent_log_prob(x_1).squeeze() + jac.squeeze()
-
-    def kl(self) -> torch.Tensor:
-        """
-        Compute the KL divergence between weight prior and posterior
-
-        Returns:
-            Scalar tensor with KL divergence
-        """
-        assert self.bayesian
-        return sum(layer.kl() for layer in self.bayesian_layers)
 
     def batch_loss(
         self, x: torch.Tensor, c: torch.Tensor, kl_scale: float = 0.0
@@ -315,19 +318,14 @@ class CFM(nn.Module):
         x_1 = self.latent_dist.sample((x.size(0), )).to(x.device, dtype=x.dtype)
 
         # Sample a time step
-
         if self.mod_t:
             t = torch.rand((1), dtype=x.dtype, device=x.device)
             t = (t + torch.arange(x.size(0)).unsqueeze(-1) / x.size(0)) % 1
         else:
             t = torch.rand((x.size(0), 1), dtype=x.dtype, device=x.device)
 
-        # Calculate x_t along the trajectory
-        x_t = (1 - t) * x + t * x_1
-        if self.add_noise:
-            x_t = x_t + torch.randn_like(x_t, device=x.device, dtype=x.dtype) * self.add_noise_scale
-        # Calculate the derivative of x_t, i.e. the conditional velocity
-        x_t_dot = -x + x_1
+        # Calculate x_t, x_t_dot along the trajectory
+        x_t, x_t_dot = self.trajectory(x, x_1, t)
         # Predict the velocity
         t = self.t_embedding(t)
         c = self.c_embedding(c)
@@ -358,6 +356,16 @@ class CFM(nn.Module):
                 "loss": loss.item(),
             }
         return loss, loss_terms
+
+    def kl(self) -> torch.Tensor:
+        """
+        Compute the KL divergence between weight prior and posterior
+
+        Returns:
+            Scalar tensor with KL divergence
+        """
+        assert self.bayesian
+        return sum(layer.kl() for layer in self.bayesian_layers)
 
     def reset_random_state(self):
         """

@@ -6,7 +6,7 @@ from torch.autograd import grad
 import torch
 import math
 from torchdiffeq import odeint
-
+from torchsde import sdeint
 
 
 # Calculates trace of network jacobian brute force
@@ -131,7 +131,7 @@ class Subnet(nn.Module):
         if not conditional:
             embed_c_dim = 0
 
-        num_layers = network_params.get("n_layers", 3)
+        num_layers = network_params.get("layers_per_block", 3)
         internal_size = network_params.get("internal_size", 3)
         dropout = network_params.get("dropout", 0.0)
         activation = network_params.get("activation", nn.SiLU)
@@ -162,12 +162,11 @@ class Subnet(nn.Module):
                     layer_list.append(nn.Dropout(p=dropout))
                 layer_list.append(activation())
 
-        self.layers = nn.Sequential(*layer_list)
-
         for name, param in layer_list[-1].named_parameters():
             if "logsig2_w" not in name:
                 param.data *= 0.02
 
+        self.layers = nn.Sequential(*layer_list)
 
     def forward(self, t, x, c=None):
         if self.conditional:
@@ -549,7 +548,7 @@ class ODEsolver(nn.Module):
         # Details on the solver under https://github.com/rtqichen/torchdiffeq
 
         super(ODEsolver, self).__init__()
-        self.method = params.get("method", "dopri5")
+        self.method = params.get("ode_method", "dopri5")
         self.rtol = params.get("rtol", 1.e-3)
         self.atol = params.get("atol", 1.e-6)
         self.step_size = params.get("step_size", 1.e-2)
@@ -557,6 +556,7 @@ class ODEsolver(nn.Module):
         t_max = float(params.get("t_max", 1.))
         self.time_intervall_forward = torch.tensor([t_min, t_max])
         self.time_intervall_backward = torch.tensor([t_max, t_min])
+        self.sde = params.get("sde", False)
         
         if self.method == "dopri5":
             print(f"        ODE solver: {self.method}, atol {self.atol}, rtol {self.rtol}, t {[t_min, t_max]}", flush=True)
@@ -588,6 +588,46 @@ class ODEsolver(nn.Module):
             return x_t
 
 
+class SDEsolver(nn.Module):
+
+    def __init__(self, params):
+        # Parameters for the ODE solver. Default settings should work fine
+        # Details on the solver under https://github.com/rtqichen/torchdiffeq
+
+        super(SDEsolver, self).__init__()
+        self.method = params.get("sde_method", "srk")
+        self.adaptive = params.get("adaptive", False)
+        self.rtol = params.get("rtol", 1.e-3)
+        self.atol = params.get("atol", 1.e-6)
+        self.step_size = params.get("step_size", 1.e-2)
+        t_min = float(params.get("t_min", 0.))
+        t_max = float(params.get("t_max", 1.))
+        self.time_intervall_forward = torch.tensor([t_min, t_max])
+        self.time_intervall_backward = torch.tensor([t_min, t_max])
+
+        if self.adaptive:
+            print(f"        SDE solver: {self.method}, atol {self.atol}, rtol {self.rtol}, t {[t_min, t_max]}",
+                  flush=True)
+        else:
+            print(f"        SDE solver: {self.method}, step_size {self.step_size}, t {[t_min, t_max]}", flush=True)
+
+    def forward(self, sde, x_initial, reverse=False):
+        #with warnings.catch_warnings():
+        #    warnings.simplefilter("ignore", UserWarning)
+        #    try:
+        x_t = sdeint(
+            sde=sde,
+            y0=x_initial,
+            ts=self.time_intervall_backward if reverse else self.time_intervall_forward,
+            rtol=self.rtol,
+            atol=self.atol,
+            method=self.method,
+            dt=self.step_size,
+            adaptive=self.adaptive
+        )
+        return x_t
+
+
 class MixtureDistribution(torch.distributions.distribution.Distribution):
 
     def __init__(self, normal_channels, uniform_channels):
@@ -608,3 +648,53 @@ class MixtureDistribution(torch.distributions.distribution.Distribution):
         samples[:, self.normal_channels] = self.normal.sample(n)
         return samples
 
+
+class LinearTrajectory(nn.Module):
+
+    def __init__(self,
+                 t_noise_scale=0,
+                 minimum_noise_scale=0):
+        super().__init__()
+        self.t_noise_scale = t_noise_scale
+        self.minimum_noise_scale = minimum_noise_scale
+
+        print(f"        Trajectory: Linear with t_noise {self.t_noise_scale}"
+              f" and minimum_noise {self.minimum_noise_scale}")
+
+    def forward(self, x_0, x_1, t):
+        if self.t_noise_scale == 0:
+            x_t = (1-t) * x_0 + t * x_1
+            x_t_dot = x_1 - x_0
+        else:
+            noise = torch.randn_like(x_0, device=x_0.device, dtype=x_0.dtype)
+            x_t = (1 - t) * x_0 + t * x_1 + t * (1-t) * self.t_noise_scale * noise
+            x_t_dot = x_1 - x_0 + (1-2*t) * noise
+        if self.minimum_noise_scale == 0:
+            return x_t, x_t_dot
+        else:
+            minimum_noise = torch.randn_like(x_0, device=x_0.device, dtype=x_0.dtype)
+            x_t += self.minimum_noise_scale * minimum_noise
+            return x_t, x_t_dot
+
+
+class SDE_wrapper(torch.nn.Module):
+    noise_type = "diagonal"
+    sde_type = "ito"
+
+    def __init__(self, model, condition=None):
+        super().__init__()
+        self.model = model
+        self.condition = condition
+
+    def f(self, t, x_t):
+        t = 1-t
+        t = self.model.t_embedding((t * torch.ones_like(x_t[:, [0]])))
+        x_t = self.model.x_embedding(x_t)
+        if self.condition is not None:
+            v = self.model.net(x_t, t, self.condition)
+        else:
+            v = self.model.net(x_t, t)
+        return v
+
+    def g(self, t, x_t):
+        return torch.ones_like(x_t)*t*(1-t)*0

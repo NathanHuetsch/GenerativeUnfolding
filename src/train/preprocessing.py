@@ -77,9 +77,6 @@ class PreprocChain(PreprocTrafo):
         self,
         trafos: Iterable[PreprocTrafo],
         normalize: bool = True,
-        norm_keep_zeros: bool = False,
-        norm_mask: Optional[torch.Tensor] = None,
-        individual_norms: bool = True,
         n_dim: int = None,
         unit_hypercube: bool = False
     ):
@@ -92,7 +89,7 @@ class PreprocChain(PreprocTrafo):
                 + f"equal to input shape {trafos[1].input_shape} of transformation {1}"
             )
 
-        trafos.append(NormalizationPreproc((n_dim,), norm_keep_zeros, norm_mask))
+        trafos.append(NormalizationPreproc((n_dim,)))
 
         super().__init__(
             trafos[0].input_shape,
@@ -102,8 +99,6 @@ class PreprocChain(PreprocTrafo):
         )
         self.trafos = nn.ModuleList(trafos)
         self.normalize = normalize
-        self.norm_keep_zeros = norm_keep_zeros
-        self.individual_norms = individual_norms
         self.unit_hypercube = unit_hypercube
 
     def init_normalization(self, x: torch.Tensor, batch_size: int = 100000):
@@ -115,19 +110,14 @@ class PreprocChain(PreprocTrafo):
                 xb = t(xb)
             xbs.append(xb)
         x = torch.cat(xbs, dim=0)
-        norm_dims = 0 if self.individual_norms else tuple(range(len(x.shape)-1))
-        if self.norm_keep_zeros:
-            x_count = torch.sum(x != 0.0, dim=norm_dims, keepdims=True)
-            x_mean = x.sum(dim=norm_dims, keepdims=True) / x_count
-            x_std = torch.sqrt(torch.sum((x - x_mean) ** 2, dim=norm_dims, keepdims=True) / x_count)
+        norm_dims = tuple(range(len(x.shape)-1))
+        x_mean = x.mean(dim=norm_dims, keepdims=True)
+        if self.unit_hypercube:
+            mins = torch.min(x-x.mean(dim=0), dim=0)[0]
+            maxs = torch.max(x-x.mean(dim=0), dim=0)[0]
+            x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
         else:
-            x_mean = x.mean(dim=norm_dims, keepdims=True)
-            if self.unit_hypercube:
-                mins = torch.min(x-x.mean(dim=0), dim=0)[0]
-                maxs = torch.max(x-x.mean(dim=0), dim=0)[0]
-                x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
-            else:
-                x_std = x.std(dim=norm_dims, keepdims=True)
+            x_std = x.std(dim=norm_dims, keepdims=True)
         self.trafos[-1].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
 
     def transform(
@@ -143,9 +133,7 @@ class PreprocChain(PreprocTrafo):
 class NormalizationPreproc(PreprocTrafo):
     def __init__(
         self,
-        shape: Tuple[int, ...],
-        keep_zeros: bool = False,
-        norm_mask: Optional[torch.Tensor] = None
+        shape: Tuple[int, ...]
     ):
         super().__init__(
             input_shape=shape, output_shape=shape, invertible=True, has_jacobian=True
@@ -153,17 +141,12 @@ class NormalizationPreproc(PreprocTrafo):
         self.mean = nn.Parameter(torch.zeros(shape), requires_grad=False)
         self.std = nn.Parameter(torch.ones(shape), requires_grad=False)
         self.jac = nn.Parameter(torch.tensor(0.0), requires_grad=False)
-        self.keep_zeros = keep_zeros
-        if norm_mask is None:
-            self.norm_mask = nn.Parameter(torch.ones(shape, dtype=torch.bool), requires_grad=False)
-        else:
-            self.norm_mask = nn.Parameter(norm_mask, requires_grad=False)
 
     def set_norm(self, mean: torch.Tensor, std: torch.Tensor):
         with torch.no_grad():
-            self.mean.data.copy_(torch.where(self.norm_mask, mean, 0.))
-            self.std.data.copy_(torch.where(self.norm_mask, std, 1.))
-            self.jac.data.copy_(std[self.norm_mask].log().sum())
+            self.mean.data.copy_(mean)
+            self.std.data.copy_(std)
+            self.jac.data.copy_(std.log().sum())
 
     def transform(
         self, x: torch.Tensor, rev: bool, jac: bool
@@ -172,9 +155,6 @@ class NormalizationPreproc(PreprocTrafo):
             z, jac = x * self.std + self.mean, self.jac
         else:
             z, jac = (x - self.mean) / self.std, -self.jac
-
-        if self.keep_zeros:
-            z = torch.where(x != 0.0, z, 0.0)
 
         return z, jac.expand(x.shape[0])  # TODO: fix jacobians
 
@@ -209,17 +189,11 @@ def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
         Preprocessing chain
     """
     normalize = True
-    norm_mask = None
-    keep_zeros = False
-    individual_norms = True
     unit_hypercube = params.get("unit_hypercube", False)
 
     return PreprocChain(
         [],
         normalize=normalize,
-        norm_keep_zeros=keep_zeros,
-        norm_mask=norm_mask,
-        individual_norms=individual_norms,
         n_dim=n_dim,
         unit_hypercube=unit_hypercube
     )

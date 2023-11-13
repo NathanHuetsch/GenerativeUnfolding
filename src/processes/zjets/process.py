@@ -45,19 +45,19 @@ class ZjetsProcess(Process):
             jet_zgs_reco = data["sim_zgs"]
 
         x_hard = np.stack([jet_masses_hard,
-                          jet_multiplicities_hard,
-                          jet_widths_hard,
-                          jet_Nsubjettinessratio_hard,
-                          jet_lnp_hard,
-                          jet_zgs_hard], axis=1)[mask]
+                           jet_widths_hard,
+                           jet_multiplicities_hard,
+                           jet_lnp_hard,
+                           jet_zgs_hard,
+                           jet_Nsubjettinessratio_hard], axis=1)[mask]
         x_hard = torch.tensor(x_hard, dtype=torch.float32, device=self.device)
 
         x_reco = np.stack([jet_masses_reco,
-                          jet_multiplicities_reco,
-                          jet_widths_reco,
-                          jet_Nsubjettinessratio_reco,
-                          jet_lnp_reco,
-                          jet_zgs_reco], axis=1)[mask]
+                           jet_widths_reco,
+                           jet_multiplicities_reco,
+                           jet_lnp_reco,
+                           jet_zgs_reco,
+                           jet_Nsubjettinessratio_reco], axis=1)[mask]
         x_reco = torch.tensor(x_reco, dtype=torch.float32, device=self.device)
 
         if subset == "analysis":
@@ -66,6 +66,8 @@ class ZjetsProcess(Process):
             n_events = len(x_hard)
             for subs in ["train", "test", "val"]:
                 low, high = self.params[f"{subs}_slice"]
+                if subs == "test":
+                    low, high = [0.65, 1.0]
                 data_slice = slice(int(n_events * low), int(n_events * high))
                 self.data[subs] = ProcessData(
                     x_hard[data_slice], x_reco[data_slice]

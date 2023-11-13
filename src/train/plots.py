@@ -38,7 +38,8 @@ class Plots:
         x_reco: torch.Tensor,
         x_gen_single: torch.Tensor,
         x_gen_dist: torch.Tensor,
-        bayesian: bool = False
+        bayesian: bool = False,
+        show_metrics: bool = True
     ):
         """
         Initializes the plotting pipeline with the data to be plotted.
@@ -76,6 +77,10 @@ class Plots:
             self.bins.append(obs.bins(o_hard).cpu().numpy())
 
         self.bayesian = bayesian
+        self.show_metrics = show_metrics
+        if self.show_metrics:
+            print(f"    Computing metrics")
+            self.compute_metrics()
 
         plt.rc("font", family="serif", size=16)
         plt.rc("axes", titlesize="medium")
@@ -178,7 +183,7 @@ class Plots:
                         color=self.colors[1],
                     ),
                 ]
-                self.hist_plot(pp, lines, bins, obs)
+                self.hist_plot(pp, lines, bins, obs, show_metrics=self.show_metrics)
                 if pickle_file is not None:
                     pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
 
@@ -312,6 +317,7 @@ class Plots:
         title: Optional[str] = None,
         no_scale: bool = False,
         yscale: Optional[str] = None,
+        show_metrics: bool = False
     ):
         """
         Makes a single histogram plot, used for the observable histograms and clustering
@@ -325,13 +331,13 @@ class Plots:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
 
-            n_panels = 1 + int(show_ratios)
+            n_panels = 1 + int(show_ratios) + int(show_metrics)
             fig, axs = plt.subplots(
                 n_panels,
                 1,
                 sharex=True,
                 figsize=(6, 4.5),
-                gridspec_kw={"height_ratios": (4, 1, 1)[:n_panels], "hspace": 0.00},
+                gridspec_kw={"height_ratios": (12, 3, 1)[:n_panels], "hspace": 0.00},
             )
             if n_panels == 1:
                 axs = [axs]
@@ -388,9 +394,13 @@ class Plots:
                 axs[1].set_yticks([0.9, 1, 1.1])
                 axs[1].set_ylim([0.85, 1.15])
                 axs[1].axhline(y=1, c="black", ls="--", lw=0.7)
-                axs[1].axhline(y=1.2, c="black", ls="dotted", lw=0.5)
-                axs[1].axhline(y=0.8, c="black", ls="dotted", lw=0.5)
+                axs[1].axhline(y=1.1, c="black", ls="dotted", lw=0.5)
+                axs[1].axhline(y=0.9, c="black", ls="dotted", lw=0.5)
 
+            if show_metrics:
+                axs[-1].text(bins[0], 0.2, f"10*EMD: {observable.emd_mean} $\pm$ {observable.emd_std}"
+                                           f"    ;    1e3*TriDist: {observable.triangle_dist}", fontsize=14)
+                axs[-1].set_yticks([])
             unit = "" if observable.unit is None else f" [{observable.unit}]"
             axs[-1].set_xlabel(f"${{{observable.tex_label}}}${unit}")
             axs[-1].set_xscale(observable.xscale)
@@ -545,20 +555,16 @@ class Plots:
                 plt.savefig(pp, format="pdf", bbox_inches="tight")
                 plt.close()
 
-
-    def evaluate_metrics(self, file: str):
-        result_dict = {}
+    def compute_metrics(self):
         for i, obs in enumerate(self.observables):
             x_gen = self.obs_gen_single[i]
             x_true = self.obs_hard[i]
             bins = self.bins[i]
-
-            emd_mean, emd_std, _ = GetEMD(x_true, x_gen, bins, nboot=10)
+            if i == 2:
+                emd_mean, emd_std, _ = GetEMD(x_true, np.round(x_gen), bins, nboot=100)
+            else:
+                emd_mean, emd_std, _ = GetEMD(x_true, x_gen, bins, nboot=100)
             triangle_dist = get_triangle_distance(x_true, x_gen, bins, make_hist=True)
-
-            result_dict[f"{obs.tex_label}_emd_mean"] = float(emd_mean)
-            result_dict[f"{obs.tex_label}_emd_std"] = float(emd_std)
-            result_dict[f"{obs.tex_label}_triangle_dist"] = float(triangle_dist)
-
-        with open(file, "w") as f:
-            yaml.dump(result_dict, f)
+            obs.emd_mean = round(emd_mean, 5)
+            obs.emd_std = round(emd_std, 5)
+            obs.triangle_dist = round(triangle_dist, 5)

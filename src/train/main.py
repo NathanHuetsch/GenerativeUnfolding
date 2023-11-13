@@ -138,7 +138,8 @@ def evaluation(
         x_reco=data.x_reco,
         x_gen_single=x_gen_single,
         x_gen_dist=x_gen_dist,
-        bayesian=model.model.bayesian
+        bayesian=model.model.bayesian,
+        show_metrics = True
     )
     print(f"    Plotting loss")
     plots.plot_losses(doc.add_file("losses"+name+".pdf"))
@@ -160,9 +161,6 @@ def evaluation(
     if params.get("plot_gt_migration", True):
         plots.plot_migration(doc.add_file("gt_migration" + name + ".pdf"), gt_hard=True)
         plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), gt_hard=True)
-
-    print(f"    Evaluating metrics")
-    plots.evaluate_metrics(doc.add_file("metrics" + name + ".yaml"))
 
 
 def build_analysis_loader(

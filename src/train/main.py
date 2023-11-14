@@ -5,10 +5,10 @@ import time
 from datetime import timedelta
 
 from .documenter import Documenter
-from .train import Model, GenerativeUnfolding, UnpairedUnfolding
-from .plots import Plots
+from .train import Model, GenerativeUnfolding, UnpairedUnfolding, Omnifold
+from .plots import Plots, OmnifoldPlots
 from ..processes.base import Process
-from ..processes.zjets.process import ZjetsProcess
+from ..processes.zjets.process import ZJetsGenerative, ZJetsOmnifold
 
 
 def init_train_args(subparsers):
@@ -53,9 +53,10 @@ def init_run(doc: Documenter, params: dict, verbose: bool) -> tuple[Model, Proce
     use_cuda = torch.cuda.is_available()
     print("Using device " + ("GPU" if use_cuda else "CPU"))
     device = torch.device("cuda:0" if use_cuda else "cpu")
-
     print("------- Loading data -------")
-    process = ZjetsProcess(params["process_params"], device)
+    dataset = params.get("process", "ZJetsGenerative")
+    print(f"    Process: {dataset}")
+    process = eval(dataset)(params["process_params"], device)
     data = (
         process.get_data("train"),
         process.get_data("val"),
@@ -68,14 +69,14 @@ def init_run(doc: Documenter, params: dict, verbose: bool) -> tuple[Model, Proce
     print(f"    Train events: {len(data[0].x_hard)}")
     print(f"    Val events: {len(data[1].x_hard)}")
     print(f"    Test events: {len(data[2].x_hard)}")
-    print(f"    Input dimension: {dims_in}")
-    print(f"    Condition dimension: {dims_c}")
+    print(f"    Hard dimension: {dims_in}")
+    print(f"    Reco dimension: {dims_c}")
 
     model_path = doc.get_file("model", False)
     os.makedirs(model_path, exist_ok=True)
     print("------- Building model -------")
     method = params.get("method", "GenerativeUnfolding")
-    print(f"    Method: {method}")
+    print(f"    Using method: {method}")
     model = eval(method)(params, verbose, device, model_path, process)
     model.method = method
     model.init_data_loaders()
@@ -83,7 +84,7 @@ def init_run(doc: Documenter, params: dict, verbose: bool) -> tuple[Model, Proce
     return model, process
 
 
-def evaluation(
+def evaluation_generative(
     doc: Documenter,
     params: dict,
     model: Model,
@@ -139,7 +140,7 @@ def evaluation(
         x_gen_single=x_gen_single,
         x_gen_dist=x_gen_dist,
         bayesian=model.model.bayesian,
-        show_metrics = True
+        show_metrics=True
     )
     print(f"    Plotting loss")
     plots.plot_losses(doc.add_file("losses"+name+".pdf"))
@@ -177,7 +178,78 @@ def build_analysis_loader(
     return analysis_loader
 
 
+def evaluation_omnifold(
+    doc: Documenter,
+    params: dict,
+    model: Model,
+    process: Process,
+    data: str = "test",
+    model_name: str = "final",
+    name: str = ""):
+
+    print(f"Checkpoint: {model_name},  Data: {data}")
+    if data == "test":
+        loader = model.test_loader
+    elif data == "train":
+        loader = model.train_loader
+
+    model.load(model_name)
+
+    print(f"    Predicting weights")
+    t0 = time.time()
+    predictions = model.predict_probs(loader=loader)
+    t1 = time.time()
+    time_diff = timedelta(seconds=round(t1 - t0))
+    print(f"    Predictions completed after {time_diff}")
+
+    if params.get("compute_test_loss", False):
+        print(f"    Computing test loss")
+        test_ll = model.dataset_loss(loader=loader)["loss"]
+        print(f"    Result: {test_ll:.4f}")
+
+    if params.get("compute_test_loglikelihood", False):
+        print(f"    Computing log likelihood {name}")
+        try:
+            t0 = time.time()
+            test_ll = model.predict_loglikelihood(loader=loader).mean()
+            t1 = time.time()
+            time_diff = timedelta(seconds=round(t1 - t0))
+            print(f"    Finished log likelihood {name} calculation after {time_diff}. Result: {test_ll}")
+        except:
+            print(f"    Failed log likelihood {name} calculation")
+
+    print(f"    Computing observables")
+    data = process.get_data(data)
+    observables = process.hard_observables()
+    plots = OmnifoldPlots(
+        observables=observables,
+        losses=model.losses,
+        x_hard=data.x_hard,
+        x_reco=data.x_reco,
+        labels=data.label,
+        predictions=predictions
+    )
+    print(f"    Plotting loss")
+    plots.plot_losses(doc.add_file("losses.pdf"))
+    print(f"    Plotting classes")
+    plots.plot_classes(doc.add_file("classification.pdf"))
+    print(f"    Plotting reco")
+    plots.plot_reco(doc.add_file("reco.pdf"))
+    print(f"    Plotting hard")
+    plots.plot_hard(doc.add_file("hard.pdf"))
+    print(f"    Plotting Observables")
+    plots.plot_observables(doc.add_file("observables.pdf"))
+
+
 def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
+
+    if params.get("method", "GenerativeUnfolding") == "Omnifold":
+        evaluation = evaluation_omnifold
+        evaluate_analysis = False
+    else:
+        evaluation = evaluation_generative
+        evaluate_analysis = params.get("evaluate_analysis")
+
     evaluation(doc, params, model, process)
     if params.get("evaluate_train", False):
         evaluation(doc, params, model, process, data="train", name="_train")
@@ -185,5 +257,5 @@ def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
         evaluation(doc, params, model, process, model_name="best", name="_best")
         if params.get("evaluate_train", False):
             evaluation(doc, params, model, process, model_name="best", data="train", name="_best_train")
-    if params.get("evaluate_analysis"):
+    if evaluate_analysis:
         evaluation(doc, params, model, process, data="analysis", name="_analysis")

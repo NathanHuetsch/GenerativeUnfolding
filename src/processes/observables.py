@@ -106,14 +106,11 @@ def momenta_to_observables(
     )
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 2]),
+            compute=lambda p: round(p[..., :], p[..., 2]),
             tex_label=r"\text{Jet multiplicity } N",
             bins=lambda obs: get_integer_bins(
                 obs, lower=4, upper=60
             ),
-            #bins=lambda obs: get_hardcoded_bins(
-            #    obs, n_bins=200, lower=0, upper=60
-            #),
             yscale="linear",
         )
     )

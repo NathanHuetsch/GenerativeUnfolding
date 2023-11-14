@@ -13,10 +13,12 @@ class ProcessData:
     Args:
         x_hard: Hard-scattering momenta, shape (n_events, n_hard_particles, 4)
         x_reco: Reco-level momenta, shape (n_events, n_reco_particles, 4)
+        label: True or False, shape (n_events, 1)
     """
 
     x_hard: torch.Tensor
     x_reco: Optional[torch.Tensor] = None
+    label: Optional[torch.Tensor] = None
 
 
 class Process(ABC):
@@ -53,6 +55,15 @@ class Process(ABC):
         pass
 
     @abstractmethod
+    def reco_observables(self) -> list[Observable]:
+        """
+        Returns observables at the reconstruction level for this process.
+
+        Returns:
+            List of observables
+        """
+        pass
+
     def hard_masses(self) -> list[Optional[float]]:
         """
         Returns masses or None (if off-shell) for the hard-scattering level particles
@@ -62,22 +73,11 @@ class Process(ABC):
         """
         pass
 
-    @abstractmethod
     def reco_masses(self) -> list[Optional[float]]:
         """
         Returns masses or None (if off-shell) for the reco-level particles
 
         Returns:
             List of masses or None
-        """
-        pass
-
-    @abstractmethod
-    def reco_observables(self) -> list[Observable]:
-        """
-        Returns observables at the reconstruction level for this process.
-
-        Returns:
-            List of observables
         """
         pass

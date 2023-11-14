@@ -8,13 +8,12 @@ import torch
 from ..models.inn import INN
 from ..models.cfm import CFM, CFMwithTransformer
 from ..models.didi import DirectDiffusion
-from ..models.transfermer import Transfermer
-from ..models.transfusion import TransfusionAR, TransfusionParallel
+from ..models.classifier import Classifier
 from ..models.fff import FreeFormFlow
 from .preprocessing import build_preprocessing, PreprocChain
 from ..processes.base import Process, ProcessData
 from .documenter import Documenter
-from ..processes.zjets.process import ZjetsProcess
+from ..processes.zjets.process import ZJetsGenerative, ZJetsOmnifold
 
 
 class Model:
@@ -91,7 +90,6 @@ class Model:
             torch.utils.data.TensorDataset(input_test.float(), cond_test.float()),
             **val_loader_kwargs,
         )
-        format_dim = lambda shape: shape[0] if len(shape) == 1 else (*shape,)
 
     def progress(self, iterable, **kwargs):
         """
@@ -558,3 +556,50 @@ class UnpairedUnfolding(GenerativeUnfolding):
         )
 
 
+class Omnifold(Model):
+    def __init__(
+        self,
+        params: dict,
+        verbose: bool,
+        device: torch.device,
+        model_path: str,
+        process: Process
+    ):
+        self.process = process
+
+        self.hard_pp = build_preprocessing(params["hard_preprocessing"], n_dim=params["dims_c"])
+        self.reco_pp = build_preprocessing(params["reco_preprocessing"], n_dim=params["dims_in"])
+        self.hard_pp.to(device)
+        self.reco_pp.to(device)
+        self.latent_dimension = self.hard_pp.output_shape[0]
+
+        super().__init__(
+            params,
+            verbose,
+            device,
+            model_path,
+            state_dict_attrs=["hard_pp", "reco_pp"],
+        )
+
+    def init_data_loaders(self):
+        data = (
+        self.process.get_data("train"),
+        self.process.get_data("val"),
+        self.process.get_data("test"),
+        )
+        label_data = tuple(subset.label for subset in data)
+        self.reco_pp.init_normalization(data[0].x_reco)
+        reco_data = tuple(self.reco_pp(subset.x_reco) for subset in data)
+        super(Omnifold, self).init_data_loaders(label_data, reco_data)
+
+    def predict_probs(self, loader=None):
+        self.model.eval()
+
+        if loader is None:
+            loader = self.test_loader
+
+        with torch.no_grad():
+            predictions = []
+            for xs, cs in self.progress(loader, desc="  Predicting", leave=False):
+                predictions.append(self.model.probs(cs))
+        return torch.cat(predictions, dim=0)

@@ -10,6 +10,7 @@ import torch
 from .utils import GetEMD, get_triangle_distance, get_normalisation_weight
 from ..processes.observables import Observable
 import yaml
+from scipy.stats import binned_statistic
 
 
 @dataclass
@@ -292,10 +293,10 @@ class Plots:
                         pp, lines, bins, obs, title=f"Event {i}", show_ratios=False
                     )
 
-    def compute_hist_data(self, bins: np.ndarray, data: np.ndarray, bayesian=False):
+    def compute_hist_data(self, bins: np.ndarray, data: np.ndarray, bayesian=False, weights=None):
         if bayesian:
             hists = np.stack(
-                [np.histogram(d, bins=bins, density=True)[0] for d in data], axis=0
+                [np.histogram(d, bins=bins, density=True, weights=weights)[0] for d in data], axis=0
             )
             y = np.median(hists, axis=0)
             y_err = np.stack(
@@ -303,7 +304,7 @@ class Plots:
                 axis=0,
             )
         else:
-            y, _ = np.histogram(data, bins=bins, density=False)
+            y, _ = np.histogram(data, bins=bins, density=False, weights=weights)
             y_err = np.sqrt(y)
         return y, y_err
 
@@ -561,10 +562,238 @@ class Plots:
             x_true = self.obs_hard[i]
             bins = self.bins[i]
             if i == 2:
-                emd_mean, emd_std, _ = GetEMD(x_true, np.round(x_gen), bins, nboot=100)
+                emd_mean, emd_std = GetEMD(x_true, np.round(x_gen), bins, nboot=100)
             else:
-                emd_mean, emd_std, _ = GetEMD(x_true, x_gen, bins, nboot=100)
+                emd_mean, emd_std = GetEMD(x_true, x_gen, bins, nboot=100)
             triangle_dist = get_triangle_distance(x_true, x_gen, bins, make_hist=True)
+            obs.emd_mean = round(emd_mean, 5)
+            obs.emd_std = round(emd_std, 5)
+            obs.triangle_dist = round(triangle_dist, 5)
+
+
+class OmnifoldPlots(Plots):
+    def __init__(
+        self,
+        observables: list[Observable],
+        losses: dict,
+        x_hard: torch.Tensor,
+        x_reco: torch.Tensor,
+        labels: torch.Tensor,
+        predictions: torch.Tensor,
+        bayesian: bool = False,
+        show_metrics: bool = True
+    ):
+        """
+        Initializes the plotting pipeline with the data to be plotted.
+        Args:
+            doc: Documenter object
+            observables: List of observables
+            losses: Dictionary with loss terms and learning rate as a function of the epoch
+            x_hard: Hard level data
+            x_reco: Reco level data
+            labels: True labels
+            predictions: Predicted labels
+        """
+        self.observables = observables
+        self.losses = losses
+        self.labels = labels.cpu().bool().numpy()
+        self.predictions = predictions.cpu().numpy()
+        self.weights = np.clip((1. - self.predictions)/self.predictions, 0, 10).squeeze()
+
+        self.obs_hard = []
+        self.obs_reco = []
+        self.bins = []
+        for obs in observables:
+            o_hard = obs.compute(x_hard)
+            o_reco = obs.compute(x_reco)
+            self.obs_hard.append(o_hard.cpu().numpy())
+            self.obs_reco.append(o_reco.cpu().numpy())
+            self.bins.append(obs.bins(o_hard).cpu().numpy())
+
+        self.bayesian = bayesian
+        self.show_metrics = show_metrics
+        if self.show_metrics:
+            print(f"    Computing metrics")
+            self.compute_metrics()
+
+        plt.rc("font", family="serif", size=16)
+        plt.rc("axes", titlesize="medium")
+        plt.rc("text.latex", preamble=r"\usepackage{amsmath}")
+        plt.rc("text", usetex=True)
+        self.colors = [f"C{i}" for i in range(10)]
+
+    def plot_classes(self, file: str):
+        """
+        Makes plots of truth and predicted classes for all observables.
+        Args:
+            file: Output file name
+        """
+
+        with PdfPages(file) as pp:
+            for obs, bins, data in zip(self.observables, self.bins, self.obs_reco):
+                binned_classes_test, _, _ = binned_statistic(data, self.labels.T, bins=bins)
+                binned_classes_predict, _, _ = binned_statistic(data, self.predictions.T, bins=bins)
+                bin_totals, _ = np.histogram(data, bins=bins)
+                y_true = np.stack(binned_classes_test, axis=1)
+                y_predict = np.stack(binned_classes_predict, axis=1)
+                y_true_err = np.sqrt(y_true * (1 - y_true) / bin_totals[:, None])
+
+                lines = []
+                for i in range(y_true.shape[-1]):
+                    lines.append(Line(
+                        y=y_true[:,i],
+                        y_err=y_true_err[:,i],
+                        color=self.colors[i],
+                        linestyle="dashed",
+                    ))
+                    lines.append(Line(
+                        y=y_predict[:,i],
+                        y_ref=y_true[:,i],
+                        label=f"{i} extra" if y_true.shape[-1] > 1 else "acceptance",
+                        color=self.colors[i],
+                    ))
+                self.hist_plot(pp, lines, bins, obs, no_scale=True, yscale="linear")
+
+    def plot_reco(self, file: str):
+        """
+        Makes plots of truth and predicted classes for all observables.
+        Args:
+            file: Output file name
+        """
+
+        with PdfPages(file) as pp:
+            for obs, bins, data in zip(self.observables, self.bins, self.obs_reco):
+
+                data_pythia = data[self.labels.squeeze()]
+                data_herwig = data[~self.labels.squeeze()]
+                weights_pythia = self.weights[self.labels.squeeze()]
+
+                y_pythia, y_pythia_err = self.compute_hist_data(bins, data_pythia, bayesian=False)
+                y_herwig, y_herwig_err = self.compute_hist_data(bins, data_herwig, bayesian=False)
+                y_reweight, y_reweight_err = self.compute_hist_data(bins, data_pythia, bayesian=self.bayesian, weights=weights_pythia)
+
+                lines = [
+                    Line(
+                        y=y_pythia,
+                        y_err=y_pythia_err,
+                        label="Pythia Reco",
+                        color=self.colors[2],
+                    ),
+                    Line(
+                        y=y_herwig,
+                        y_err=y_herwig_err,
+                        label="Herwig Reco",
+                        color=self.colors[0],
+                    ),
+                    Line(
+                        y=y_reweight,
+                        y_err=y_reweight_err,
+                        y_ref=y_herwig,
+                        label="Pyth. Rew.",
+                        color=self.colors[1],
+                    ),
+                ]
+                self.hist_plot(pp, lines, bins, obs, show_metrics=False)
+
+    def plot_hard(self, file: str):
+        """
+        Makes plots of truth and predicted classes for all observables.
+        Args:
+            file: Output file name
+        """
+
+        with PdfPages(file) as pp:
+            for obs, bins, data in zip(self.observables, self.bins, self.obs_hard):
+                data_pythia = data[self.labels.squeeze()]
+                data_herwig = data[~self.labels.squeeze()]
+                weights_pythia = self.weights[self.labels.squeeze()]
+
+                y_pythia, y_pythia_err = self.compute_hist_data(bins, data_pythia, bayesian=False)
+                y_herwig, y_herwig_err = self.compute_hist_data(bins, data_herwig, bayesian=False)
+                y_reweight, y_reweight_err = self.compute_hist_data(bins, data_pythia, bayesian=self.bayesian,
+                                                                    weights=weights_pythia)
+
+                lines = [
+                    Line(
+                        y=y_pythia,
+                        y_err=y_pythia_err,
+                        label="Pythia Hard",
+                        color=self.colors[2],
+                    ),
+                    Line(
+                        y=y_herwig,
+                        y_err=y_herwig_err,
+                        label="Herwig Hard",
+                        color=self.colors[0],
+                    ),
+                    Line(
+                        y=y_reweight,
+                        y_err=y_reweight_err,
+                        y_ref=y_herwig,
+                        label="Pyth. Rew.",
+                        color=self.colors[1],
+                    ),
+                ]
+                self.hist_plot(pp, lines, bins, obs, show_metrics=False)
+
+    def plot_observables(self, file: str, pickle_file: Optional[str] = None):
+        """
+        Makes histograms of truth and generated distributions for all observables.
+        Args:
+            file: Output file name
+        """
+        pickle_data = []
+        with PdfPages(file) as pp:
+            for obs, bins, data_hard, data_reco in zip(
+            self.observables, self.bins, self.obs_hard, self.obs_reco):
+
+                data_reco = data_reco[~self.labels.squeeze()]
+                data_hard_herwig = data_hard[~self.labels.squeeze()]
+                data_hard_pythia = data_hard[self.labels.squeeze()]
+                weights = self.weights[self.labels.squeeze()]
+
+                y_hard, y_hard_err = self.compute_hist_data(bins, data_hard_herwig, bayesian=False)
+                y_reco, y_reco_err = self.compute_hist_data(bins, data_reco, bayesian=False)
+                y_gen, y_gen_err = self.compute_hist_data(bins, data_hard_pythia, bayesian=self.bayesian, weights=weights)
+                lines = [
+                    Line(
+                        y=y_reco,
+                        y_err=y_reco_err,
+                        label="Reco",
+                        color=self.colors[2],
+                    ),
+                    Line(
+                        y=y_hard,
+                        y_err=y_hard_err,
+                        label="Hard",
+                        color=self.colors[0],
+                    ),
+                    Line(
+                        y=y_gen,
+                        y_err=y_gen_err,
+                        y_ref=y_hard,
+                        label="Unfold",
+                        color=self.colors[1],
+                    ),
+                ]
+                self.hist_plot(pp, lines, bins, obs, show_metrics=self.show_metrics)
+                if pickle_file is not None:
+                    pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
+
+        if pickle_file is not None:
+            with open(pickle_file, "wb") as f:
+                pickle.dump(pickle_data, f)
+
+    def compute_metrics(self):
+        for obs, bins, data_hard, data_reco in zip(
+                self.observables, self.bins, self.obs_hard, self.obs_reco):
+
+            data_hard_herwig = data_hard[~self.labels.squeeze()]
+            data_hard_pythia = data_hard[self.labels.squeeze()]
+            weights = self.weights[self.labels.squeeze()]
+
+            emd_mean, emd_std = GetEMD(data_hard_herwig, data_hard_pythia, bins, nboot=100, weights_arr=weights)
+            triangle_dist = get_triangle_distance(data_hard_herwig, data_hard_pythia, bins, make_hist=True, weights=weights)
             obs.emd_mean = round(emd_mean, 5)
             obs.emd_std = round(emd_std, 5)
             obs.triangle_dist = round(triangle_dist, 5)

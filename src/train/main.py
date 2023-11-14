@@ -99,7 +99,13 @@ def evaluation_generative(
     elif data == "train":
         loader = model.train_loader
     elif data == "analysis":
-        loader = build_analysis_loader(params, model, process)
+        analysis_data = process.get_data("analysis")
+        val_loader_kwargs = {"shuffle": False, "batch_size": 10*params["batch_size"], "drop_last": False}
+        loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(model.hard_pp(analysis_data.x_hard).float(),
+                                           model.reco_pp(analysis_data.x_reco).float()),
+            **val_loader_kwargs,
+        )
 
     model.load(model_name)
 
@@ -162,20 +168,6 @@ def evaluation_generative(
     if params.get("plot_gt_migration", True):
         plots.plot_migration(doc.add_file("gt_migration" + name + ".pdf"), gt_hard=True)
         plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), gt_hard=True)
-
-
-def build_analysis_loader(
-    params: dict,
-    model: Model,
-    process: Process):
-
-    analysis_data = process.get_data("analysis")
-    analysis_loader = model.get_loader(input_data=model.hard_pp(analysis_data.x_hard),
-                                       cond_data=model.reco_pp(analysis_data.x_reco),
-                                       batch_size=params["batch_size"],
-                                       drop_last=False,
-                                       shuffle=False)
-    return analysis_loader
 
 
 def evaluation_omnifold(

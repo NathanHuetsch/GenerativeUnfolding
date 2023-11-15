@@ -75,7 +75,7 @@ class Model:
         self.n_val_samples = len(input_val)
         self.bs = self.params.get("batch_size")
         self.bs_sample = self.params.get("batch_size_sample", self.bs)
-        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": True}
+        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": False}
         val_loader_kwargs = {"shuffle": False, "batch_size": self.bs_sample, "drop_last": False}
 
         self.train_loader = torch.utils.data.DataLoader(
@@ -535,7 +535,7 @@ class UnpairedUnfolding(GenerativeUnfolding):
 
     def begin_epoch(self):
         # The only difference between paired and unpaired is shuffling the condition data each epoch
-        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": True}
+        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": False}
         val_loader_kwargs = {"shuffle": False, "batch_size": self.bs_sample, "drop_last": False}
 
         permutation_train = torch.randperm(self.n_train_samples)

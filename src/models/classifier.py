@@ -23,6 +23,8 @@ class Classifier(nn.Module):
         self.bayesian = params.get("bayesian", False)
         self.bayesian_layers = []
         self.build_classifier()
+        if self.bayesian:
+            print(f"        Bayesian set to True, Bayesian layers: ", len(self.bayesian_layers))
 
     def build_classifier(self):
         layer_class = VBLinear if self.bayesian else nn.Linear
@@ -75,24 +77,6 @@ class Classifier(nn.Module):
         else:
             return torch.sigmoid(self.model(c))
 
-    def sample(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Generates samples and log probabilities for the given condition
-
-        Args:
-            c: condition tensor, shape (n_events, dims_c)
-        Returns:
-            x: generated samples, shape (n_events, dims_in)
-            log_prob: log probabilites, shape (n_events, )
-        """
-        logits = self.model(c)
-        unnormed_probs = logits.exp()
-        log_probs = logits - unnormed_probs.sum(dim=1, keepdims=True).log()
-        classes = torch.multinomial(unnormed_probs, num_samples=1, replacement=True)[:,0]
-        x = nn.functional.one_hot(classes, num_classes=self.dims_in)
-        log_prob = log_probs[:, classes]
-        return x, log_prob
-
     def batch_loss(
         self, x: torch.Tensor, c: torch.Tensor, kl_scale: float = 0.0
     ) -> tuple[torch.Tensor, dict]:
@@ -107,5 +91,64 @@ class Classifier(nn.Module):
             loss: batch loss
             loss_terms: dictionary with loss contributions
         """
-        loss = -self.log_prob(x, c).mean()
-        return loss, {"loss": loss.item()}
+        classifier_loss = -self.log_prob(x, c).mean()
+        if self.bayesian:
+            kl_loss = kl_scale * self.kl() / self.dims_in
+            loss = classifier_loss + kl_loss
+            loss_terms = {
+                "loss": loss.item(),
+                "bce": classifier_loss.item(),
+                "kl": kl_loss.item(),
+            }
+        else:
+            loss = classifier_loss
+            loss_terms = {
+                "loss": loss.item(),
+            }
+        return loss, loss_terms
+
+    def kl(self) -> torch.Tensor:
+        """
+        Compute the KL divergence between weight prior and posterior
+
+        Returns:
+            Scalar tensor with KL divergence
+        """
+        assert self.bayesian
+        return sum(layer.kl() for layer in self.bayesian_layers)
+
+    def reset_random_state(self):
+        """
+        Resets the random state of the Bayesian layers
+        """
+        assert self.bayesian
+        for layer in self.bayesian_layers:
+            layer.reset_random()
+
+    def sample_random_state(self) -> list[np.ndarray]:
+        """
+        Sample new random states for the Bayesian layers and return them as a list
+
+        Returns:
+            List of numpy arrays with random states
+        """
+        assert self.bayesian
+        return [layer.sample_random_state() for layer in self.bayesian_layers]
+
+    def import_random_state(self, states: list[np.ndarray]):
+        """
+        Import a list of random states into the Bayesian layers
+
+        Args:
+            states: List of numpy arrays with random states
+        """
+        assert self.bayesian
+        for layer, s in zip(self.bayesian_layers, states):
+            layer.import_random_state(s)
+
+    def generate_random_state(self):
+        """
+        Generate and save a set of random states for repeated use
+        """
+        assert self.bayesian
+        self.random_states = [self.sample_random_state() for i in range(self.bayesian_samples)]

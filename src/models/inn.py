@@ -305,8 +305,8 @@ class INN(nn.Module):
             loss = inn_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": inn_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "nll": inn_loss.item(),
+                "kl": kl_loss.item(),
             }
         else:
             loss = inn_loss

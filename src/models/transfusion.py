@@ -693,8 +693,8 @@ class TransfusionAR(nn.Module):
             loss = cfm_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": cfm_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "mse": cfm_loss.item(),
+                "kl": kl_loss.item(),
             }
         else:
             loss = cfm_loss
@@ -932,8 +932,8 @@ class TransfusionParallel(TransfusionAR):
             loss = cfm_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": cfm_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "mse": cfm_loss.item(),
+                "kl": kl_loss.item(),
             }
         else:
             loss = cfm_loss

@@ -339,16 +339,16 @@ class CFM(nn.Module):
             loss = cfm_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": cfm_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "mse": cfm_loss.item(),
+                "kl": kl_loss.item(),
             }
         elif self.l2_regularization:
             regularization_loss = self.l2_factor * torch.norm(v_pred)
             loss = cfm_loss + regularization_loss
             loss_terms = {
                 "loss": loss.item(),
-                "cfm_loss": cfm_loss.item(),
-                "regularization_loss": regularization_loss.item()
+                "mse": cfm_loss.item(),
+                "l2": regularization_loss.item()
             }
         else:
             loss = cfm_loss
@@ -517,8 +517,8 @@ class CFMwithTransformer(CFM):
             loss = cfm_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": cfm_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "mse": cfm_loss.item(),
+                "kl": kl_loss.item(),
             }
         else:
             loss = cfm_loss

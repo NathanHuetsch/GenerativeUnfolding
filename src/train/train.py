@@ -75,7 +75,7 @@ class Model:
         self.n_val_samples = len(input_val)
         self.bs = self.params.get("batch_size")
         self.bs_sample = self.params.get("batch_size_sample", self.bs)
-        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": True}
+        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": False}
         val_loader_kwargs = {"shuffle": False, "batch_size": self.bs_sample, "drop_last": False}
 
         self.train_loader = torch.utils.data.DataLoader(
@@ -474,12 +474,12 @@ class GenerativeUnfolding(Model):
         """
         samples = super().predict_distribution(loader)
         samples_pp = self.hard_pp(
-            samples.reshape(-1, *samples.shape[2:]),
+            samples.reshape(-1, samples.shape[-1]),
             rev=True,
             jac=False,
             batch_size=1000,
         )
-        return samples_pp.reshape(*samples.shape[:2], *samples_pp.shape[1:])
+        return samples_pp.reshape(*samples.shape[:3], *samples_pp.shape[1:])
 
     def sample_events(
         self,
@@ -598,8 +598,26 @@ class Omnifold(Model):
         if loader is None:
             loader = self.test_loader
 
+        bayesian_samples = self.params.get("bayesian_samples", 20) if self.model.bayesian else 1
         with torch.no_grad():
-            predictions = []
-            for xs, cs in self.progress(loader, desc="  Predicting", leave=False):
-                predictions.append(self.model.probs(cs))
-        return torch.cat(predictions, dim=0)
+            all_samples = []
+            for i in range(bayesian_samples):
+                if self.model.bayesian:
+                    self.model.reset_random_state()
+                predictions = []
+                t0 = time.time()
+                for xs, cs in self.progress(loader, desc="  Predicting", leave=False):
+                    predictions.append(self.model.probs(cs))
+                all_samples.append(torch.cat(predictions, dim=0))
+                if self.model.bayesian:
+                    print(f"    Finished bayesian sample {i} in {time.time() - t0}", flush=True)
+            all_samples = torch.cat(all_samples, dim=0)
+        if self.model.bayesian:
+            return all_samples.reshape(
+                bayesian_samples,
+                len(all_samples) // bayesian_samples,
+                *all_samples.shape[1:],
+            )
+        else:
+            return all_samples
+

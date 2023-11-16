@@ -123,7 +123,10 @@ class Subnet(nn.Module):
     ):
         super().__init__()
         network_params = params.get("network_params")
+
         embed_x_dim = network_params.get("embed_x_dim", params["dims_in"])
+        if params.get("give_x1"):
+            embed_x_dim = 2*embed_x_dim
         embed_c_dim = network_params.get("embed_c_dim", params["dims_c"])
         embed_t_dim = network_params.get("embed_t_dim", 1)
 
@@ -151,7 +154,7 @@ class Subnet(nn.Module):
         for n in range(num_layers):
             input_dim, output_dim = internal_size, internal_size
             if n == 0:
-                input_dim = embed_t_dim+embed_x_dim+embed_c_dim
+                input_dim = embed_t_dim + embed_x_dim + embed_c_dim
             if n == num_layers - 1:
                 output_dim = params["dims_in"]
 

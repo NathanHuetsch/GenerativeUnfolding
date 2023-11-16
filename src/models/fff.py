@@ -112,17 +112,17 @@ class FreeFormFlow(nn.Module):
             loss = nll_loss + mse_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": nll_loss.item(),
-                "mse_loss": mse_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "nll": nll_loss.item(),
+                "mse": mse_loss.item(),
+                "kl": kl_loss.item(),
             }
 
         else:
             loss = nll_loss + mse_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": nll_loss.item(),
-                "mse_loss": mse_loss.item()
+                "nll": nll_loss.item(),
+                "mse": mse_loss.item()
             }
         return loss, loss_terms
 

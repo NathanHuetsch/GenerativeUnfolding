@@ -47,7 +47,6 @@ class Subnet(nn.Module):
                 input_dim = size_in
             if n == num_layers - 1:
                 output_dim = size_out
-
             self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
 
             if n < num_layers - 1:
@@ -305,8 +304,8 @@ class INN(nn.Module):
             loss = inn_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": inn_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "nll": inn_loss.item(),
+                "kl": kl_loss.item(),
             }
         else:
             loss = inn_loss

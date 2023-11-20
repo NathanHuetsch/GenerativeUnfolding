@@ -25,8 +25,10 @@ class DirectDiffusion(CFM):
         """
         super(CFM, self).__init__()
         self.params = params
+        self.give_x1 = self.params.get("give_x1", False)
+        if self.give_x1:
+            print(f"        Using give_x1")
         self.dims_in = params["dims_in"]
-        #self.dims_c = params["dims_c"]
         self.dims_c = 0
         self.bayesian = params.get("bayesian", False)
         self.bayesian_samples = params.get("bayesian_samples", 20)
@@ -48,7 +50,6 @@ class DirectDiffusion(CFM):
             self.l2_factor = self.params.get("l2_factor", 1.e-4)
 
         self.loss_fct = nn.MSELoss()
-
 
     def build_distributions(self):
 
@@ -80,15 +81,20 @@ class DirectDiffusion(CFM):
         def net_wrapper(t, x_t):
             x_t = self.x_embedding(x_t)
             t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
-            v = self.net(t, x_t)
+            if self.give_x1:
+                v = self.net(x_1, x_t)
+            else:
+                v = self.net(t, x_t)
             return v
 
         with torch.no_grad():
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
+            if self.give_x1:
+                x_1_embedded = self.x_embedding(x_1)
             x_t = self.ODEsolver(net_wrapper, x_1, reverse=True)
+
         # return the generated sample. This function does not calculate jacobians and just returns a 0 instead
         return x_t[-1], torch.Tensor([0])
-
 
     def sample_with_probs(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError("Direct Diffusion does not allow likelihood calculation")
@@ -123,7 +129,11 @@ class DirectDiffusion(CFM):
         # Predict the velocity
         t = self.t_embedding(t)
         x_t = self.x_embedding(x_t)
-        v_pred = self.net(t, x_t)
+        if self.give_x1:
+            x_1 = self.x_embedding(x_1)
+            v_pred = self.net(x_1, x_t)
+        else:
+            v_pred = self.net(t, x_t)
         # Calculate the loss
         cfm_loss = self.loss_fct(v_pred, x_t_dot)
 
@@ -132,16 +142,16 @@ class DirectDiffusion(CFM):
             loss = cfm_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": cfm_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "mse": cfm_loss.item(),
+                "kl": kl_loss.item(),
             }
         elif self.l2_regularization:
             regularization_loss = self.l2_factor * torch.norm(v_pred)
             loss = cfm_loss + regularization_loss
             loss_terms = {
                 "loss": loss.item(),
-                "cfm_loss": cfm_loss.item(),
-                "regularization_loss": regularization_loss.item()
+                "mse": cfm_loss.item(),
+                "l2": regularization_loss.item()
             }
         else:
             loss = cfm_loss

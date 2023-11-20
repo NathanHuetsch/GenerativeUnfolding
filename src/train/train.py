@@ -6,6 +6,7 @@ from datetime import timedelta
 import os
 import torch
 from ..models.inn import INN
+from ..models.transfermer import Transfermer
 from ..models.cfm import CFM, CFMwithTransformer
 from ..models.didi import DirectDiffusion
 from ..models.classifier import Classifier
@@ -172,7 +173,6 @@ class Model:
         use_ema = self.params.get("use_ema", False)
 
         start_time = time.time()
-        self.model.train()
         for epoch in self.progress(
             range(self.params["epochs"]), desc="  Epoch", leave=False, position=0
         ):
@@ -199,14 +199,14 @@ class Model:
                 self.scheduler.step()
 
             for name, loss in epoch_train_losses.items():
-                self.losses[f"train_{name}"].append(loss)
+                self.losses[f"tr_{name}"].append(loss)
             for name, loss in self.dataset_loss(self.val_loader).items():
                 self.losses[f"val_{name}"].append(loss)
             if epoch < 20:
                 last_20_val_losses = self.losses["val_loss"]
             else:
                 last_20_val_losses = self.losses["val_loss"][-20:]
-            self.losses["val_loss_movingAvg"].append(torch.tensor(last_20_val_losses).mean().item())
+            self.losses["val_movAvg"].append(torch.tensor(last_20_val_losses).mean().item())
 
             self.losses["lr"].append(self.optimizer.param_groups[0]["lr"])
 
@@ -220,14 +220,14 @@ class Model:
                 self.save("final" if checkpoint_overwrite else f"epoch_{epoch}")
 
             self.print(
-                f"    Epoch {epoch}: "
+                f"    Ep {epoch}: "
                 + ", ".join(
                     [
-                        f"{name} = {loss[-1]:{'.2e' if name == 'lr' else '.6f'}}"
+                        f"{name} = {loss[-1]:{'.2e' if name == 'lr' else '.5f'}}"
                         for name, loss in self.losses.items()
                     ]
                 )
-                + f", time = {timedelta(seconds=round(time.time() - start_time))} seconds"
+                + f", t = {timedelta(seconds=round(time.time() - start_time))}"
             )
 
         self.save("final")
@@ -476,12 +476,15 @@ class GenerativeUnfolding(Model):
         """
         samples = super().predict_distribution(loader)
         samples_pp = self.hard_pp(
-            samples.reshape(-1, *samples.shape[2:]),
+            samples.reshape(-1, samples.shape[-1]),
             rev=True,
             jac=False,
             batch_size=1000,
         )
-        return samples_pp.reshape(*samples.shape[:2], *samples_pp.shape[1:])
+        if self.model.bayesian:
+            return samples_pp.reshape(*samples.shape[:3], *samples_pp.shape[1:])
+        else:
+            return samples_pp.reshape(*samples.shape[:2], *samples_pp.shape[1:])
 
     def sample_events(
         self,
@@ -600,8 +603,26 @@ class Omnifold(Model):
         if loader is None:
             loader = self.test_loader
 
+        bayesian_samples = self.params.get("bayesian_samples", 20) if self.model.bayesian else 1
         with torch.no_grad():
-            predictions = []
-            for xs, cs in self.progress(loader, desc="  Predicting", leave=False):
-                predictions.append(self.model.probs(cs))
-        return torch.cat(predictions, dim=0)
+            all_samples = []
+            for i in range(bayesian_samples):
+                if self.model.bayesian:
+                    self.model.reset_random_state()
+                predictions = []
+                t0 = time.time()
+                for xs, cs in self.progress(loader, desc="  Predicting", leave=False):
+                    predictions.append(self.model.probs(cs))
+                all_samples.append(torch.cat(predictions, dim=0))
+                if self.model.bayesian:
+                    print(f"    Finished bayesian sample {i} in {time.time() - t0}", flush=True)
+            all_samples = torch.cat(all_samples, dim=0)
+        if self.model.bayesian:
+            return all_samples.reshape(
+                bayesian_samples,
+                len(all_samples) // bayesian_samples,
+                *all_samples.shape[1:],
+            )
+        else:
+            return all_samples
+

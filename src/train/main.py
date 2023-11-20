@@ -219,7 +219,9 @@ def evaluation_omnifold(
         x_hard=data.x_hard,
         x_reco=data.x_reco,
         labels=data.label,
-        predictions=predictions
+        predictions=predictions,
+        bayesian=model.model.bayesian,
+        show_metrics=True
     )
     print(f"    Plotting loss")
     plots.plot_losses(doc.add_file("losses.pdf"))

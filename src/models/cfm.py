@@ -339,16 +339,16 @@ class CFM(nn.Module):
             loss = cfm_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": cfm_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "mse": cfm_loss.item(),
+                "kl": kl_loss.item(),
             }
         elif self.l2_regularization:
             regularization_loss = self.l2_factor * torch.norm(v_pred)
             loss = cfm_loss + regularization_loss
             loss_terms = {
                 "loss": loss.item(),
-                "cfm_loss": cfm_loss.item(),
-                "regularization_loss": regularization_loss.item()
+                "mse": cfm_loss.item(),
+                "l2": regularization_loss.item()
             }
         else:
             loss = cfm_loss
@@ -405,17 +405,11 @@ class CFM(nn.Module):
 
 class CFMwithTransformer(CFM):
 
-    def __init__(self, dims_in: int, dims_c: int, params: dict):
-        super().__init__(dims_in, dims_c, params)
-        self.bayesian_layers = []
-        # Build the cfm MLP
-        layer_class = VBLinear if self.bayesian else nn.Linear
-        layer_args = {}
-        if "prior_prec" in self.params:
-            layer_args["prior_prec"] = self.params["prior_prec"]
-        if "std_init" in self.params:
-            layer_args["std_init"] = self.params["std_init"]
-        self.dim_embedding = params["dim_embedding"]
+    def __init__(self, params: dict):
+        super().__init__(params)
+
+    def build_net(self):
+        self.dim_embedding = self.params["dim_embedding"]
         self.transformer = nn.Transformer(
             d_model=self.dim_embedding,
             nhead=self.params["n_head"],
@@ -423,32 +417,24 @@ class CFMwithTransformer(CFM):
             num_decoder_layers=self.params["n_decoder_layers"],
             dim_feedforward=self.params["dim_feedforward"],
             dropout=self.params.get("dropout", 0.0),
-            # activation=params.get("activation", "relu"),
             batch_first=True,
         )
+        n_params = sum(p.numel() for p in self.transformer.parameters() if p.requires_grad)
+        print(f"        Network: Transformer with {n_params} parameters")
 
-        single_layer = self.params.get("single_layer", False)
-        if single_layer:
-            self.net = layer_class(self.dim_embedding+1, 1)
-            if self.bayesian:
-                self.bayesian_layers.append(self.net)
-        else:
-            self.net = Subnet(
-                self.params.get("layers_per_block", 3),
-                size_in=self.dim_embedding+1,
-                size_out=1,
-                internal_size=self.params.get("internal_size"),
-                dropout=self.params.get("dropout", 0.0),
-                activation=self.params.get("activation", nn.SiLU),
-                layer_class=layer_class,
-                layer_args=layer_args,
-            )
-            if self.bayesian:
-                self.bayesian_layers.extend(
-                    layer for layer in self.net.layer_list if isinstance(layer, VBLinear)
-                )
+        layer_class = VBLinear if self.bayesian else nn.Linear
+        layer_args = {}
+        if "prior_prec" in self.params:
+            layer_args["prior_prec"] = self.params["prior_prec"]
+        if "std_init" in self.params:
+            layer_args["std_init"] = self.params["std_init"]
+        self.net = layer_class(self.dim_embedding+1, 1, **layer_args)
+        n_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
+        print(f"        Network: Final layer with {n_params} parameters")
 
-        print("Bayesian layers ",len(self.bayesian_layers))
+        if self.bayesian:
+            self.bayesian_layers.append(self.net)
+            print(f"        Bayesian set to True, Bayesian layers: ", len(self.bayesian_layers))
 
     def compute_embedding(
         self, p: torch.Tensor, n_components: int, t: torch.Tensor = None
@@ -464,7 +450,6 @@ class CFMwithTransformer(CFM):
             p = p.unsqueeze(-1)
         else:
             p = torch.cat([p.unsqueeze(-1), t.unsqueeze(-1).expand(t.shape[0], p.shape[1], 1)], dim=-1)
-        #print(p.shape)
         n_rest = self.dim_embedding - n_components - p.shape[-1]
         assert n_rest >= 0
         zeros = torch.zeros((*p.shape[:2], n_rest), device=p.device, dtype=p.dtype)
@@ -506,7 +491,6 @@ class CFMwithTransformer(CFM):
                 t = t
             )
         )
-        #v_pred = self.net(torch.cat([t, embedding.reshape((embedding.size(0), -1))], dim=-1))
         v_pred = self.net(torch.cat([t.unsqueeze(-1).repeat(1, x_t.size(1), 1), embedding], dim=-1)).squeeze()
         #v_pred = self.net(embedding).squeeze()
         # Calculate the loss
@@ -517,8 +501,8 @@ class CFMwithTransformer(CFM):
             loss = cfm_loss + kl_loss
             loss_terms = {
                 "loss": loss.item(),
-                "likeli_loss": cfm_loss.item(),
-                "kl_loss": kl_loss.item(),
+                "mse": cfm_loss.item(),
+                "kl": kl_loss.item(),
             }
         else:
             loss = cfm_loss
@@ -564,16 +548,7 @@ class CFMwithTransformer(CFM):
             # Sample from the latent distribution
             x_1 = torch.randn((batch_size, self.dims_in), dtype=dtype, device=device)
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
-
-            x_t = odeint(
-                net_wrapper,
-                x_1,
-                torch.tensor([1, 0], dtype=dtype, device=device),
-                atol=self.atol,
-                rtol=self.rtol,
-                method=self.method,
-                options=dict(step_size=self.step_size)
-            )
+            x_t = self.solver(net_wrapper, x_1, reverse=True)
         # return the generated sample. This function does not calculate jacobians and just returns a 0 instead
         return x_t[-1], torch.Tensor([0])
 
@@ -625,55 +600,18 @@ class CFMwithTransformer(CFM):
             n_components=self.dims_c
         )).requires_grad_(False)
 
-        if not self.bayesian_transfer:
-            # Solve the ODE from t=0 to t=1 from data to noise
-            x_t, logp_diff_t = odeint(
-                net_wrapper,
-                states,
-                torch.tensor([self.t_min, self.t_max], dtype=dtype, device=device),
-                atol=self.atol,
-                rtol=self.rtol,
-                method=self.method,
-                options=dict(step_size=self.step_size)
-                )
-            # Extract the latent space points and the jacobians
-            x_1 = x_t[-1].detach()
-            jac = logp_diff_t[-1].detach()
-            return self.latent_log_prob(x_1).squeeze() - jac.squeeze()
-
-        else:
-            log_probs = []
-            for layer in self.bayesian_layers:
-                layer.map = True
-            x_t, logp_diff_t = odeint(
-                net_wrapper,
-                states,
-                torch.tensor([0, 1], dtype=dtype, device=device),
-                atol=self.atol,
-                rtol=self.rtol,
-                method=self.method,
-                options=dict(step_size=self.step_size)
+        # Solve the ODE from t=0 to t=1 from data to noise
+        x_t, logp_diff_t = odeint(
+            net_wrapper,
+            states,
+            torch.tensor([self.t_min, self.t_max], dtype=dtype, device=device),
+            atol=self.atol,
+            rtol=self.rtol,
+            method=self.method,
+            options=dict(step_size=self.step_size)
             )
-            x_1_map = x_t[-1].detach()
-            jac_map = logp_diff_t[-1].detach()
-            log_probs.append(self.latent_log_prob(x_1_map) - jac_map.squeeze())
+        # Extract the latent space points and the jacobians
+        x_1 = x_t[-1].detach()
+        jac = logp_diff_t[-1].detach()
+        return self.latent_log_prob(x_1).squeeze() - jac.squeeze()
 
-            for layer in self.bayesian_layers:
-                layer.map = False
-
-            for random_state in self.random_states:
-                self.import_random_state(random_state)
-                x_t, logp_diff_t = odeint(
-                    net_wrapper,
-                    states,
-                    torch.tensor([0, 1], dtype=dtype, device=device),
-                    atol=self.atol,
-                    rtol=self.rtol,
-                    method=self.method,
-                    options=dict(step_size=self.step_size)
-                )
-                x_1 = x_t[-1].detach()
-                jac = logp_diff_t[-1].detach()
-                log_probs.append(self.latent_log_prob(x_1) - jac.squeeze())
-
-            return torch.stack(log_probs, dim=0)

@@ -6,6 +6,7 @@ from datetime import timedelta
 import os
 import torch
 from ..models.inn import INN
+from ..models.transfermer import Transfermer
 from ..models.cfm import CFM, CFMwithTransformer
 from ..models.didi import DirectDiffusion
 from ..models.classifier import Classifier
@@ -172,7 +173,6 @@ class Model:
         use_ema = self.params.get("use_ema", False)
 
         start_time = time.time()
-        self.model.train()
         for epoch in self.progress(
             range(self.params["epochs"]), desc="  Epoch", leave=False, position=0
         ):
@@ -199,14 +199,14 @@ class Model:
                 self.scheduler.step()
 
             for name, loss in epoch_train_losses.items():
-                self.losses[f"train_{name}"].append(loss)
+                self.losses[f"tr_{name}"].append(loss)
             for name, loss in self.dataset_loss(self.val_loader).items():
                 self.losses[f"val_{name}"].append(loss)
             if epoch < 20:
                 last_20_val_losses = self.losses["val_loss"]
             else:
                 last_20_val_losses = self.losses["val_loss"][-20:]
-            self.losses["val_loss_movingAvg"].append(torch.tensor(last_20_val_losses).mean().item())
+            self.losses["val_movAvg"].append(torch.tensor(last_20_val_losses).mean().item())
 
             self.losses["lr"].append(self.optimizer.param_groups[0]["lr"])
 
@@ -220,14 +220,14 @@ class Model:
                 self.save("final" if checkpoint_overwrite else f"epoch_{epoch}")
 
             self.print(
-                f"    Epoch {epoch}: "
+                f"    Ep {epoch}: "
                 + ", ".join(
                     [
-                        f"{name} = {loss[-1]:{'.2e' if name == 'lr' else '.6f'}}"
+                        f"{name} = {loss[-1]:{'.2e' if name == 'lr' else '.5f'}}"
                         for name, loss in self.losses.items()
                     ]
                 )
-                + f", time = {timedelta(seconds=round(time.time() - start_time))} seconds"
+                + f", t = {timedelta(seconds=round(time.time() - start_time))}"
             )
 
         self.save("final")
@@ -479,7 +479,10 @@ class GenerativeUnfolding(Model):
             jac=False,
             batch_size=1000,
         )
-        return samples_pp.reshape(*samples.shape[:3], *samples_pp.shape[1:])
+        if self.model.bayesian:
+            return samples_pp.reshape(*samples.shape[:3], *samples_pp.shape[1:])
+        else:
+            return samples_pp.reshape(*samples.shape[:2], *samples_pp.shape[1:])
 
     def sample_events(
         self,

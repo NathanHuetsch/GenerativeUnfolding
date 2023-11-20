@@ -585,9 +585,9 @@ class Plots:
                 triangle_dist_mean = np.array(triangle_dist).mean()
                 triangle_dist_std = np.array(triangle_dist).std()
             obs.emd_mean = round(emd_mean, 4)
-            obs.emd_std = round(emd_std, 4)
+            obs.emd_std = round(emd_std, 5)
             obs.triangle_mean = round(triangle_dist_mean, 4)
-            obs.triangle_std = round(triangle_dist_std, 4)
+            obs.triangle_std = round(triangle_dist_std, 5)
 
 
 class OmnifoldPlots(Plots):
@@ -846,6 +846,6 @@ class OmnifoldPlots(Plots):
                 triangle_dist_std = np.array(triangle_dist).std()
 
             obs.emd_mean = round(emd_mean, 4)
-            obs.emd_std = round(emd_std, 4)
+            obs.emd_std = round(emd_std, 5)
             obs.triangle_mean = round(triangle_dist_mean, 4)
-            obs.triangle_std = round(triangle_dist_std, 4)
+            obs.triangle_std = round(triangle_dist_std, 5)

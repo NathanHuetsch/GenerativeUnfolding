@@ -82,8 +82,9 @@ class DirectDiffusion(CFM):
             x_t = self.x_embedding(x_t)
             t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
             if self.give_x1:
-                x_t = torch.cat([x_t, x_1_embedded], dim=1)
-            v = self.net(t, x_t)
+                v = self.net(x_1, x_t)
+            else:
+                v = self.net(t, x_t)
             return v
 
         with torch.no_grad():
@@ -130,8 +131,9 @@ class DirectDiffusion(CFM):
         x_t = self.x_embedding(x_t)
         if self.give_x1:
             x_1 = self.x_embedding(x_1)
-            x_t = torch.cat([x_t, x_1], dim=1)
-        v_pred = self.net(t, x_t)
+            v_pred = self.net(x_1, x_t)
+        else:
+            v_pred = self.net(t, x_t)
         # Calculate the loss
         cfm_loss = self.loss_fct(v_pred, x_t_dot)
 

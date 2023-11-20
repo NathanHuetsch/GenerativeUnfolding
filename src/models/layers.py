@@ -125,10 +125,11 @@ class Subnet(nn.Module):
         network_params = params.get("network_params")
 
         embed_x_dim = network_params.get("embed_x_dim", params["dims_in"])
-        if params.get("give_x1"):
-            embed_x_dim = 2*embed_x_dim
         embed_c_dim = network_params.get("embed_c_dim", params["dims_c"])
         embed_t_dim = network_params.get("embed_t_dim", 1)
+
+        if params.get("give_x1"):
+            embed_t_dim = embed_x_dim
 
         self.conditional = conditional
         if not conditional:
@@ -150,7 +151,7 @@ class Subnet(nn.Module):
             layer_class = nn.Linear
             layer_args = {}
 
-        layer_list = []
+        self.layer_list = []
         for n in range(num_layers):
             input_dim, output_dim = internal_size, internal_size
             if n == 0:
@@ -158,18 +159,18 @@ class Subnet(nn.Module):
             if n == num_layers - 1:
                 output_dim = params["dims_in"]
 
-            layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+            self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
 
             if n < num_layers - 1:
                 if dropout > 0:
-                    layer_list.append(nn.Dropout(p=dropout))
-                layer_list.append(activation())
+                    self.layer_list.append(nn.Dropout(p=dropout))
+                self.layer_list.append(activation())
 
-        for name, param in layer_list[-1].named_parameters():
+        for name, param in self.layer_list[-1].named_parameters():
             if "logsig2_w" not in name:
                 param.data *= 0.02
 
-        self.layers = nn.Sequential(*layer_list)
+        self.layers = nn.Sequential(*self.layer_list)
 
     def forward(self, t, x, c=None):
         if self.conditional:
@@ -191,7 +192,7 @@ class EmbeddingNet(nn.Module):
     ):
         super().__init__()
 
-        num_layers = params.get("n_layers", 3)
+        num_layers = params.get("layers_per_block", 3)
         internal_size = params.get("internal_size", 3)
         dropout = params.get("dropout", 0.0)
         activation = params.get("activation", nn.SiLU)

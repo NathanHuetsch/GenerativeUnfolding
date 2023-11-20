@@ -47,7 +47,6 @@ class Subnet(nn.Module):
                 input_dim = size_in
             if n == num_layers - 1:
                 output_dim = size_out
-
             self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
 
             if n < num_layers - 1:

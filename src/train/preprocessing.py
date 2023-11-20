@@ -226,11 +226,13 @@ def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
         Preprocessing chain
     """
     normalize = True
-    unit_hypercube = params.get("unit_hypercube", False)
+    unit_hypercube = params.get("unit_hypercube", False),
+    sigmoid_norm = params.get("sigmoid_norm", False)
 
     return PreprocChain(
         [],
         normalize=normalize,
         n_dim=n_dim,
-        unit_hypercube=unit_hypercube
+        unit_hypercube=unit_hypercube,
+        sigmoid_norm=sigmoid_norm
     )

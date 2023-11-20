@@ -1,4 +1,4 @@
-run_name: small_net_example
+run_name: 6_layers-64_wide-gaussian_latent-cosine_annealing-40_epochs
 run_folder: CFM
 
 method: GenerativeUnfolding
@@ -25,7 +25,7 @@ batch_size_sample: 10000
 lr_scheduler: cosine_annealing
 weight_decay: 0.
 betas: [0.9, 0.99]
-epochs: 100
+epochs: 40
 
 # Architecture
 model: CFM
@@ -38,7 +38,7 @@ add_noise_scale: 1.e-5
 network_params:
   network_class: Subnet
   internal_size: 64
-  layers_per_block: 8
+  layers_per_block: 6
   activation: SiLU
 
   embed_t: False
@@ -68,5 +68,6 @@ ODE_params:
   rtol: 1.e-5
   step_size: 1.e-2
 
-evaluate_train: False
-evaluate_analysis: False
+evaluate_train: True
+evaluate_analysis: True
+evaluate_best: True

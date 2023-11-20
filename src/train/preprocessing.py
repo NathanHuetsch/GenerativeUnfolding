@@ -78,7 +78,8 @@ class PreprocChain(PreprocTrafo):
         trafos: Iterable[PreprocTrafo],
         normalize: bool = True,
         n_dim: int = None,
-        unit_hypercube: bool = False
+        unit_hypercube: bool = False,
+        sigmoid_norm: bool = False
     ):
         if any(
             tp.output_shape != tn.input_shape
@@ -90,6 +91,9 @@ class PreprocChain(PreprocTrafo):
             )
 
         trafos.append(NormalizationPreproc((n_dim,)))
+        if sigmoid_norm:
+            trafos.append(SigmoidPreproc((n_dim,)))
+
 
         super().__init__(
             trafos[0].input_shape,
@@ -100,6 +104,7 @@ class PreprocChain(PreprocTrafo):
         self.trafos = nn.ModuleList(trafos)
         self.normalize = normalize
         self.unit_hypercube = unit_hypercube
+        self.sigmoid_norm = sigmoid_norm
 
     def init_normalization(self, x: torch.Tensor, batch_size: int = 100000):
         if not self.normalize:
@@ -118,7 +123,10 @@ class PreprocChain(PreprocTrafo):
             x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
         else:
             x_std = x.std(dim=norm_dims, keepdims=True)
-        self.trafos[-1].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
+        if self.sigmoid_norm:
+            self.trafos[-2].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
+        else:
+            self.trafos[-1].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
 
     def transform(
         self, x: torch.Tensor, rev: bool, jac: bool
@@ -177,6 +185,35 @@ class UnitHypercubePreprocessing(PreprocTrafo):
             z, jac = x / self.factors, -self.jac
             print(z.min(), z.max())
         return z, jac.expand(x.shape[0])
+
+
+class SigmoidPreproc(PreprocTrafo):
+    def __init__(
+        self,
+        shape: Tuple[int, ...]
+    ):
+        super().__init__(
+            input_shape=shape, output_shape=shape, invertible=True, has_jacobian=True
+        )
+        self.mean = nn.Parameter(torch.zeros(shape), requires_grad=False)
+        self.std = nn.Parameter(torch.ones(shape), requires_grad=False)
+        self.jac = nn.Parameter(torch.tensor(0.0), requires_grad=False)
+
+    def set_norm(self, mean: torch.Tensor, std: torch.Tensor):
+        with torch.no_grad():
+            self.mean.data.copy_(mean)
+            self.std.data.copy_(std)
+            self.jac.data.copy_(std.log().sum())
+
+    def transform(
+        self, x: torch.Tensor, rev: bool, jac: bool
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if rev:
+            z, jac = torch.logit(x), self.jac
+        else:
+            z, jac = torch.sigmoid(x), -self.jac
+
+        return z, jac.expand(x.shape[0])  # TODO: fix jacobians
 
 
 def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:

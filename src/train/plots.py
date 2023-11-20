@@ -562,10 +562,11 @@ class Plots:
             x_true = self.obs_hard[i]
             bins = self.bins[i]
             if i == 2:
-                emd_mean, emd_std = GetEMD(x_true, np.round(x_gen), bins, nboot=5)
+                emd_mean, emd_std = GetEMD(x_true, np.round(x_gen), bins, nboot=100)
             else:
-                emd_mean, emd_std = GetEMD(x_true, x_gen, bins, nboot=5)
+                emd_mean, emd_std = GetEMD(x_true, x_gen, bins, nboot=100)
             triangle_dist = get_triangle_distance(x_true, x_gen, bins, make_hist=True)
+            print(emd_mean, emd_std)
             obs.emd_mean = round(emd_mean, 5)
             obs.emd_std = round(emd_std, 5)
             obs.triangle_dist = round(triangle_dist, 5)

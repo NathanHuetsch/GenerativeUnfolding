@@ -298,11 +298,8 @@ class Plots:
             hists = np.stack(
                 [np.histogram(d, bins=bins, density=True, weights=weights)[0] for d in data], axis=0
             )
-            y = np.median(hists, axis=0)
-            y_err = np.stack(
-                (np.quantile(hists, 0.159, axis=0), np.quantile(hists, 0.841, axis=0)),
-                axis=0,
-            )
+            y = hists[0]
+            y_err = np.std(hists, axis=0)
         else:
             y, _ = np.histogram(data, bins=bins, density=False, weights=weights)
             y_err = np.sqrt(y)
@@ -580,10 +577,9 @@ class Plots:
                     triangle_dist_sample, _ = get_triangle_distance(x_true, sample, bins, nboot=1)
                     emd.append(emd_sample)
                     triangle_dist.append(triangle_dist_sample)
-                emd_mean = np.array(emd).mean()
+                emd_mean = emd[0]
+                triangle_dist_mean = triangle_dist[0]
                 emd_std = np.array(emd).std()
-                print(emd_mean, emd_std)
-                triangle_dist_mean = np.array(triangle_dist).mean()
                 triangle_dist_std = np.array(triangle_dist).std()
             obs.emd_mean = round(emd_mean, 4)
             obs.emd_std = round(emd_std, 5)
@@ -647,11 +643,13 @@ class OmnifoldPlots(Plots):
             hists = np.stack(
                 [np.histogram(data, bins=bins, density=True, weights=weight_sample)[0] for weight_sample in weights], axis=0
             )
-            y = np.median(hists, axis=0)
-            y_err = np.stack(
-                (np.quantile(hists, 0.159, axis=0), np.quantile(hists, 0.841, axis=0)),
-                axis=0,
-            )
+            #y = np.median(hists, axis=0)
+            y = hists[0]
+            #y_err = np.stack(
+            #    (np.quantile(hists, 0.159, axis=0), np.quantile(hists, 0.841, axis=0)),
+            #    axis=0,
+            #)
+            y_err = np.std(hists, axis=0)
         else:
             y, _ = np.histogram(data, bins=bins, density=False, weights=weights)
             y_err = np.sqrt(y)

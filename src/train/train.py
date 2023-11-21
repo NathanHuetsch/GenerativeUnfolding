@@ -304,7 +304,13 @@ class Model:
                 t0 = time.time()
                 data_batches = []
                 if self.model.bayesian:
-                    self.model.reset_random_state()
+                    if i == 0:
+                        for layer in self.model.bayesian_layers:
+                            layer.map = True
+                    else:
+                        for layer in self.model.bayesian_layers:
+                            layer.map = False
+                        self.model.reset_random_state()
                 for xs, cs in self.progress(
                     loader,
                     desc="  Generating",
@@ -422,8 +428,8 @@ class GenerativeUnfolding(Model):
     ):
         self.process = process
 
-        self.hard_pp = build_preprocessing(params["hard_preprocessing"], n_dim=params["dims_c"])
-        self.reco_pp = build_preprocessing(params["reco_preprocessing"], n_dim=params["dims_in"])
+        self.hard_pp = build_preprocessing(params.get("hard_preprocessing", {}), n_dim=params["dims_in"])
+        self.reco_pp = build_preprocessing(params.get("reco_preprocessing", {}), n_dim=params["dims_c"])
         self.hard_pp.to(device)
         self.reco_pp.to(device)
         self.latent_dimension = self.hard_pp.output_shape[0]
@@ -435,6 +441,11 @@ class GenerativeUnfolding(Model):
             model_path,
             state_dict_attrs=["hard_pp", "reco_pp"],
         )
+
+        self.unpaired = params.get("unpaired", False)
+        if self.unpaired:
+            assert isinstance(self.model, DirectDiffusion)
+            print(f"    Using unpaired data")
 
     def init_data_loaders(self):
         data = (
@@ -467,6 +478,33 @@ class GenerativeUnfolding(Model):
         plt.close()'''
         
         super(GenerativeUnfolding, self).init_data_loaders(self.input_data_preprocessed, self.cond_data_preprocessed)
+
+    def begin_epoch(self):
+        # The only difference between paired and unpaired is shuffling the condition data each epoch
+        if not self.unpaired:
+            return
+
+        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": False}
+        val_loader_kwargs = {"shuffle": False, "batch_size": self.bs_sample, "drop_last": False}
+
+        input_train = self.input_data_preprocessed[0].clone()
+        cond_train = self.cond_data_preprocessed[0].clone()
+        input_val = self.input_data_preprocessed[1].clone()
+        cond_val = self.cond_data_preprocessed[1].clone()
+
+        permutation_train = torch.randperm(self.n_train_samples)
+        permutation_val = torch.randperm(self.n_val_samples)
+        cond_train = cond_train[permutation_train]
+        cond_val = cond_val[permutation_val]
+
+        self.train_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_train.float(), cond_train.float()),
+            **train_loader_kwargs,
+        )
+        self.val_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_val.float(), cond_val.float()),
+            **val_loader_kwargs,
+        )
 
     def predict(self, loader=None) -> torch.Tensor:
         """
@@ -501,80 +539,6 @@ class GenerativeUnfolding(Model):
             return samples_pp.reshape(*samples.shape[:3], *samples_pp.shape[1:])
         else:
             return samples_pp.reshape(*samples.shape[:2], *samples_pp.shape[1:])
-
-    def sample_events(
-        self,
-        n_samples: int,
-        x_reco: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Samples hard-scattering level events for the given reco-level events.
-
-        Args:
-            n_samples: number of hard-scattering events to sample for each reco-level event
-            x_reco: Reco-level momenta, shape (n_events or 1, n_reco_particles, 4)
-            alpha: Theory parameters, shape (n_events or 1, n_parameters)
-            event_type: Type of the event, e.g. LO or NLO, as a one-hot encoded tensor,
-                        shape (n_events, n_types), optional
-        Returns:
-            Tensor with hard-scattering momenta, shape (n_samples, n_events, n_hard_particles, 4)
-            Tensor with phase space densities, shape (n_samples, n_events)
-        """
-        with torch.no_grad():
-            n_events = len(x_reco)
-            c = self.reco_pp(x_reco).expand(n_events, -1).float()
-            x, log_prob = self.model.sample_with_probs(c)
-            x_hard, jac = self.hard_pp(x, rev=True, jac=True)
-            return x_hard.reshape(n_samples, -1, *x_hard.shape[1:]), torch.exp(
-                log_prob - jac
-            )
-
-
-class UnpairedUnfolding(GenerativeUnfolding):
-    def __init__(
-        self,
-        params: dict,
-        verbose: bool,
-        device: torch.device,
-        model_path: str,
-        process: Process
-    ):
-        self.process = process
-        self.hard_pp = build_preprocessing(params["hard_preprocessing"], n_dim=6)
-        self.reco_pp = build_preprocessing(params["reco_preprocessing"], n_dim=6)
-        self.hard_pp.to(device)
-        self.reco_pp.to(device)
-        self.latent_dimension = self.hard_pp.output_shape[0]
-
-        super().__init__(
-            params,
-            verbose,
-            device,
-            model_path,
-            process,
-        )
-
-    def begin_epoch(self):
-        # The only difference between paired and unpaired is shuffling the condition data each epoch
-        train_loader_kwargs = {"shuffle": True, "batch_size": self.bs, "drop_last": False}
-        val_loader_kwargs = {"shuffle": False, "batch_size": self.bs_sample, "drop_last": False}
-
-        permutation_train = torch.randperm(self.n_train_samples)
-        permutation_val = torch.randperm(self.n_val_samples)
-
-        input_train = self.input_data_preprocessed[0]
-        cond_train = self.cond_data_preprocessed[0][permutation_train]
-        input_val = self.input_data_preprocessed[1]
-        cond_val = self.cond_data_preprocessed[1][permutation_val]
-
-        self.train_loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(input_train.float(), cond_train.float()),
-            **train_loader_kwargs,
-        )
-        self.val_loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(input_val.float(), cond_val.float()),
-            **val_loader_kwargs,
-        )
 
 
 class Omnifold(Model):
@@ -624,7 +588,13 @@ class Omnifold(Model):
             all_samples = []
             for i in range(bayesian_samples):
                 if self.model.bayesian:
-                    self.model.reset_random_state()
+                    if i == 0:
+                        for layer in self.model.bayesian_layers:
+                            layer.map = True
+                    else:
+                        for layer in self.model.bayesian_layers:
+                            layer.map = False
+                        self.model.reset_random_state()
                 predictions = []
                 t0 = time.time()
                 for xs, cs in self.progress(loader, desc="  Predicting", leave=False):

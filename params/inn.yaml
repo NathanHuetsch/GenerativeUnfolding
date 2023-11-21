@@ -1,7 +1,9 @@
-run_name: test #permute_False-8_blocks-4_layers-20_wide-6_bins-uniform_latent-cosine_annealing-40_epochs
-run_folder: INN/RQS
+run_name: test
+run_folder: INN/rqs
 
 method: GenerativeUnfolding
+
+process: ZJetsGenerative
 process_params:
   train_slice: [0., 0.6]
   val_slice: [0.6, 0.65]
@@ -11,38 +13,35 @@ process_params:
 
 # Preprocessing
 hard_preprocessing:
-  type:
-  unit_hypercube: False
-  sigmoid_norm: True
-  args:
-    pt_conserved: True
+  # add uniform noise [-0.5, 0.5] to these channels
+  uniform_noise_channels: [2]
 reco_preprocessing:
-  type:
-  unit_hypercube: False
-  sigmoid_norm: True
+  uniform_noise_channels: [2]
 
 # Training
 lr: 1.e-3
-max_lr: 5.e-4
+max_lr: 3.e-4
 batch_size: 128
 lr_scheduler: cosine_annealing
 weight_decay: 0.
 betas: [0.9, 0.999]
-epochs: 2
+epochs: 30
 
 # Architecture
 model: INN
-latent_space: uniform
+bayesian: False
+bayesian_samples: 20
+
+latent_space: gaussian
 uniform_bounds: [0., 1.]
 
-n_blocks: 8
-internal_size: 20
-layers_per_block: 4
+n_blocks: 10
+internal_size: 16
+layers_per_block: 3
 coupling_type: rational_quadratic
 permute_soft: False
 num_bins: 6
 dropout: 0.0
 
-evaluate_train: True
+evaluate_train: False
 evaluate_analysis: True
-evaluate_best: True

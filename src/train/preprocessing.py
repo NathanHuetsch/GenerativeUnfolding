@@ -79,7 +79,7 @@ class PreprocChain(PreprocTrafo):
         normalize: bool = True,
         n_dim: int = None,
         unit_hypercube: bool = False,
-        sigmoid_norm: bool = False
+        erf_norm: bool = False
     ):
         if any(
             tp.output_shape != tn.input_shape
@@ -91,8 +91,8 @@ class PreprocChain(PreprocTrafo):
             )
 
         trafos.append(NormalizationPreproc((n_dim,)))
-        if sigmoid_norm:
-            trafos.append(SigmoidPreproc((n_dim,)))
+        if erf_norm:
+            trafos.append(ErfPreproc((n_dim,)))
 
 
         super().__init__(
@@ -104,7 +104,7 @@ class PreprocChain(PreprocTrafo):
         self.trafos = nn.ModuleList(trafos)
         self.normalize = normalize
         self.unit_hypercube = unit_hypercube
-        self.sigmoid_norm = sigmoid_norm
+        self.erf_norm = erf_norm
 
     def init_normalization(self, x: torch.Tensor, batch_size: int = 100000):
         if not self.normalize:
@@ -123,7 +123,7 @@ class PreprocChain(PreprocTrafo):
             x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
         else:
             x_std = x.std(dim=norm_dims, keepdims=True)
-        if self.sigmoid_norm:
+        if self.erf_norm:
             self.trafos[-2].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
         else:
             self.trafos[-1].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
@@ -187,7 +187,7 @@ class UnitHypercubePreprocessing(PreprocTrafo):
         return z, jac.expand(x.shape[0])
 
 
-class SigmoidPreproc(PreprocTrafo):
+class ErfPreproc(PreprocTrafo):
     def __init__(
         self,
         shape: Tuple[int, ...]
@@ -209,9 +209,11 @@ class SigmoidPreproc(PreprocTrafo):
         self, x: torch.Tensor, rev: bool, jac: bool
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if rev:
-            z, jac = torch.logit(x), self.jac
+            z, jac = x, self.jac,
+            z[:, 4], jac = torch.erf(z[:, 4]) + .001, self.jac
         else:
-            z, jac = torch.sigmoid(x), -self.jac
+            z, jac = x, -self.jac
+            z[:, 4], jac = torch.erfinv(z[:, 4] - .001), -self.jac
 
         return z, jac.expand(x.shape[0])  # TODO: fix jacobians
 
@@ -227,12 +229,12 @@ def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
     """
     normalize = True
     unit_hypercube = params.get("unit_hypercube", False),
-    sigmoid_norm = params.get("sigmoid_norm", False)
+    erf_norm = params.get("erf_norm", False)
 
     return PreprocChain(
         [],
         normalize=normalize,
         n_dim=n_dim,
         unit_hypercube=unit_hypercube,
-        sigmoid_norm=sigmoid_norm
+        erf_norm=erf_norm
     )

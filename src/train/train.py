@@ -450,6 +450,22 @@ class GenerativeUnfolding(Model):
             self.reco_pp.init_normalization(data[0].x_reco)
         self.input_data_preprocessed = tuple(self.hard_pp(subset.x_hard) for subset in data)
         self.cond_data_preprocessed = tuple(self.reco_pp(subset.x_reco) for subset in data)
+        
+        '''import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(2,3)
+        k=0
+        colors = [f"C{i}" for i in range(10)]
+        for i in range(2):
+            for j in range(3):
+                ax[i,j].hist(self.input_data_preprocessed[2][:, k].cpu().numpy(), color = colors[0], linestyle = 'dashed', histtype = 'step')
+                ax[i,j].hist(self.cond_data_preprocessed[2][:, k].cpu().numpy(), color = colors[2], linestyle = 'dashed', histtype = 'step')
+                k+=1
+
+        #ax[1,1].set_yscale("log"); ax[1,1].set_ylim(0.1, 3e5)
+        fig.savefig("../check_preproc_erf.pdf")
+        print("preproc check")
+        plt.close()'''
+        
         super(GenerativeUnfolding, self).init_data_loaders(self.input_data_preprocessed, self.cond_data_preprocessed)
 
     def predict(self, loader=None) -> torch.Tensor:

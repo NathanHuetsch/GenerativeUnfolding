@@ -5,7 +5,7 @@ import time
 from datetime import timedelta
 
 from .documenter import Documenter
-from .train import Model, GenerativeUnfolding, UnpairedUnfolding, Omnifold
+from .train import Model, GenerativeUnfolding, Omnifold
 from .plots import Plots, OmnifoldPlots
 from ..processes.base import Process
 from ..processes.zjets.process import ZJetsGenerative, ZJetsOmnifold

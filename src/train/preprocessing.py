@@ -118,6 +118,8 @@ class PreprocChain(PreprocTrafo):
             x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
         else:
             x_std = x.std(dim=norm_dims, keepdims=True)
+        self.mean = x_mean
+        self.std = x_std
         self.trafos[-1].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
 
     def transform(
@@ -156,26 +158,27 @@ class NormalizationPreproc(PreprocTrafo):
         else:
             z, jac = (x - self.mean) / self.std, -self.jac
 
-        return z, jac.expand(x.shape[0])  # TODO: fix jacobians
+        return z, jac.expand(x.shape[0])
 
 
-class UnitHypercubePreprocessing(PreprocTrafo):
-    def __init__(self, shape: Tuple[int, ...],):
+class UniformNoisePreprocessing(PreprocTrafo):
+    def __init__(self, shape: Tuple[int, ...], channels):
 
         super().__init__(
             input_shape=shape, output_shape=shape, invertible=True, has_jacobian=True
         )
+        self.channels = channels
 
     def transform(
         self, x: torch.Tensor, rev: bool, jac: bool
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if rev:
-            z, jac = x * self.factors, self.jac
+            z, jac = x, torch.tensor([0])
+            z[:, self.channels] = torch.round(z[:, self.channels])
         else:
-
-            self.jac = self.factors.log().sum()
-            z, jac = x / self.factors, -self.jac
-            print(z.min(), z.max())
+            z, jac = x, torch.tensor([0])
+            noise = torch.rand_like(z[:, self.channels])-0.5
+            z[:, self.channels] = z[:, self.channels] + noise
         return z, jac.expand(x.shape[0])
 
 
@@ -190,9 +193,14 @@ def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
     """
     normalize = True
     unit_hypercube = params.get("unit_hypercube", False)
+    uniform_noise_channels = params.get("uniform_noise_channels", [])
+
+    trafos = []
+    if len(uniform_noise_channels) != 0:
+        trafos.append(UniformNoisePreprocessing(shape=(n_dim,), channels=uniform_noise_channels))
 
     return PreprocChain(
-        [],
+        trafos,
         normalize=normalize,
         n_dim=n_dim,
         unit_hypercube=unit_hypercube

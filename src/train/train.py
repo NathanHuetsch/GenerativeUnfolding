@@ -427,7 +427,6 @@ class GenerativeUnfolding(Model):
         process: Process
     ):
         self.process = process
-        self.unpaired = params.get("unpaired", False)
 
         self.hard_pp = build_preprocessing(params.get("hard_preprocessing", {}), n_dim=params["dims_in"])
         self.reco_pp = build_preprocessing(params.get("reco_preprocessing", {}), n_dim=params["dims_c"])
@@ -442,6 +441,11 @@ class GenerativeUnfolding(Model):
             model_path,
             state_dict_attrs=["hard_pp", "reco_pp"],
         )
+
+        self.unpaired = params.get("unpaired", False)
+        if self.unpaired:
+            assert isinstance(self.model, DirectDiffusion)
+            print(f"    Using unpaired data")
 
     def init_data_loaders(self):
         data = (

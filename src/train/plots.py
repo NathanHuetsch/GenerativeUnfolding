@@ -548,7 +548,7 @@ class Plots:
                     h, x, y = np.histogram2d(data_hard, data_reco, bins=(bins, bins))
                 h = np.ma.divide(h, np.sum(h, -1, keepdims=True)).filled(0)
                 h[h == 0] = np.nan
-                plt.pcolormesh(bins, bins, h, cmap=cmap)
+                plt.pcolormesh(bins, bins, h, cmap=cmap, rasterized=True)
                 plt.colorbar()
 
                 unit = "" if obs.unit is None else f" [{obs.unit}]"

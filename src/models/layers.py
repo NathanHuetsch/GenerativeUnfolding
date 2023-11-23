@@ -698,7 +698,21 @@ class SDE_wrapper(torch.nn.Module):
             v = self.model.net(x_t, t, self.condition)
         else:
             v = self.model.net(x_t, t)
+        #l =  (1./(t))*x_t
+        #return 2*v - l*x_t
         return v
 
+    #def g(self, t, x_t):
+    #    t = 1-t
+    #    coeff = 2*t/(1-t)
+    #    #return torch.ones_like(x_t)*torch.sqrt(coeff)
+    #    return torch.zeros_like(x_t)
+
     def g(self, t, x_t):
-        return torch.ones_like(x_t)*t*(1-t)*0
+        return torch.sqrt(t * (1-t)) * torch.ones_like(x_t, device=x_t.device, dtype=x_t.dtype)
+
+    def beta(self, t, beta_0=1.e-5, beta_1=1.e-4):
+        if t >= 0 and t < 1 / 2:
+            return beta_0 + 2 * (beta_1 - beta_0) * t
+        else:
+            return beta_1 - 2 * (beta_1 - beta_0) * (t - 1 / 2)

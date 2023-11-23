@@ -242,18 +242,19 @@ class CFM(nn.Module):
         dtype = c.dtype
         device = c.device
 
-        # Wrap the network such that the ODE solver can call it
-        if self.solver_type == "ODE":
-            def net_wrapper(t, x_t):
-                x_t = self.x_embedding(x_t)
-                t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
-                v = self.net(t, x_t, c)
-                return v
-        else:
-            net_wrapper = SDE_wrapper(self, c)
-
         with torch.no_grad():
             c = self.c_embedding(c)
+
+        # Wrap the network such that the ODE solver can call it
+            if self.solver_type == "ODE":
+                def net_wrapper(t, x_t):
+                    x_t = self.x_embedding(x_t)
+                    t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
+                    v = self.net(t, x_t, c)
+                    return v
+            else:
+                net_wrapper = SDE_wrapper(self, c)
+
             # Sample from the latent distribution
             x_1 = self.latent_dist.sample((batch_size, )).to(device, dtype=dtype)
             # Solve the ODE from t=1 to t=0 from the sampled initial condition

@@ -224,15 +224,19 @@ def evaluation_omnifold(
         show_metrics=True
     )
     print(f"    Plotting loss")
-    plots.plot_losses(doc.add_file("losses.pdf"))
+    plots.plot_losses(doc.add_file("losses"+name+".pdf"))
     print(f"    Plotting classes")
-    plots.plot_classes(doc.add_file("classification.pdf"))
+    plots.plot_classes(doc.add_file("classification"+name+".pdf"))
     print(f"    Plotting reco")
-    plots.plot_reco(doc.add_file("reco.pdf"))
+    plots.plot_reco(doc.add_file("reco"+name+".pdf"))
     print(f"    Plotting hard")
-    plots.plot_hard(doc.add_file("hard.pdf"))
+    plots.plot_hard(doc.add_file("hard"+name+".pdf"))
     print(f"    Plotting Observables")
-    plots.plot_observables(doc.add_file("observables.pdf"))
+    if params.get("save_hist_data", False):
+        pickle_file = doc.add_file("observables"+name+".pkl")
+    else:
+        pickle_file = None
+    plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
 
 
 def eval_model(doc: Documenter, params: dict, model: Model, process: Process):

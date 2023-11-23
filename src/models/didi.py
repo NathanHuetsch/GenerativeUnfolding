@@ -35,7 +35,6 @@ class DirectDiffusion(CFM):
         self.bayesian_layers = []
         self.bayesian_factor = params.get("bayesian_factor", 1)
 
-        self.ODEsolver = ODEsolver(params=params.get("ODE_params", {}))
         t_noise_scale = params.get("t_noise_scale", 0)
         minimum_noise_scale = params.get("minimum_noise_scale", 0)
         self.trajectory = LinearTrajectory(t_noise_scale=t_noise_scale,
@@ -44,6 +43,7 @@ class DirectDiffusion(CFM):
         self.build_embeddings()
         self.build_net()
         self.build_distributions()
+        self.build_solver()
 
         self.l2_regularization = self.params.get("l2_regularization", False)
         if self.l2_regularization:
@@ -77,21 +77,25 @@ class DirectDiffusion(CFM):
         dtype = x_1.dtype
         device = x_1.device
 
-        # Wrap the network such that the ODE solver can call it
-        def net_wrapper(t, x_t):
-            x_t = self.x_embedding(x_t)
-            t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
-            if self.give_x1:
-                v = self.net(x_1, x_t)
-            else:
-                v = self.net(t, x_t)
-            return v
-
         with torch.no_grad():
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
             if self.give_x1:
                 x_1_embedded = self.x_embedding(x_1)
-            x_t = self.ODEsolver(net_wrapper, x_1, reverse=True)
+
+            # Wrap the network such that the ODE solver can call it
+            if self.solver_type == "ODE":
+                def net_wrapper(t, x_t):
+                    x_t = self.x_embedding(x_t)
+                    t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
+                    if self.give_x1:
+                        v = self.net(x_1_embedded, x_t)
+                    else:
+                        v = self.net(t, x_t)
+                    return v
+            else:
+                net_wrapper = SDE_wrapper(self, condition=None)
+
+            x_t = self.solver(net_wrapper, x_1, reverse=True)
 
         # return the generated sample. This function does not calculate jacobians and just returns a 0 instead
         return x_t[-1], torch.Tensor([0])

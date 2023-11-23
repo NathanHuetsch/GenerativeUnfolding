@@ -1,4 +1,4 @@
-from typing import Type, Callable, Union
+from typing import Type, Callable, Union, Dict
 import math
 import torch
 import torch.nn as nn
@@ -8,6 +8,86 @@ import FrEIA.modules as fm
 
 from .spline_blocks import RationalQuadraticSplineBlock
 from .layers import VBLinear, MixtureDistribution
+from .madnis.models.flow import FlowMapping
+from .madnis.mappings.coupling.splines import RationalQuadraticSplineBlock
+from .madnis.mappings.coupling.linear import AffineCoupling
+
+
+class MLP(nn.Module):
+    """
+    Creates a dense subnetwork
+    which can be used within the invertible modules.
+    """
+
+    def __init__(
+        self,
+        meta: Dict,
+        features_in: int,
+        features_out: int,
+        pass_inputs: bool = False
+    ):
+        """
+        Args:
+          meta:
+            Dictionary with defining parameters
+            to construct the network.
+          features_in:
+            Number of input features.
+          features_out:
+            Number of output features.
+          pass_inputs:
+            If True, a tuple is expected as input to forward and only the first tensor
+            is used as input to the network
+        """
+        super().__init__()
+
+        # which activation
+        if isinstance(meta["activation"], str):
+            try:
+                activation = {
+                    "relu": nn.ReLU,
+                    "elu": nn.ELU,
+                    "leakyrelu": nn.LeakyReLU,
+                    "tanh": nn.Tanh
+                }[meta["activation"]]
+            except KeyError:
+                raise ValueError(f'Unknown activation "{meta["activation"]}"')
+        else:
+            activation = meta["activation"]
+
+        layer_constructor = meta.get("layer_constructor", nn.Linear)
+        layer_args = {}
+        if layer_constructor == VBLinear:
+            layer_args = {}
+            layer_args["prior_prec"] = meta.get("prior_prec", 1)
+            layer_args["std_init"] = meta.get("std_init", -9)
+
+        # Define the layers
+        input_dim = features_in
+        layers = []
+        for i in range(meta["layers"] - 1):
+            layers.append(layer_constructor(
+                input_dim,
+                meta["units"]
+            ))
+            layers.append(activation())
+            input_dim = meta["units"]
+        layers.append(layer_constructor(
+            input_dim,
+            features_out,
+            **layer_args
+        ))
+        nn.init.zeros_(layers[-1].weight)
+        nn.init.zeros_(layers[-1].bias)
+        self.layers = nn.Sequential(*layers)
+        self.pass_inputs = pass_inputs
+
+    def forward(self, x):
+        if self.pass_inputs:
+            x, *rest = x
+            return self.layers(x), *rest
+        else:
+            return self.layers(x)
 
 
 class Subnet(nn.Module):
@@ -179,7 +259,6 @@ class INN(nn.Module):
                     )
 
             CouplingBlock = RationalQuadraticSplineBlock
-            bounds = self.params.get("spline_bounds", 10)
             block_kwargs = {
                 "num_bins": self.params.get("num_bins", 10),
                 "subnet_constructor": constructor_fct,
@@ -198,12 +277,52 @@ class INN(nn.Module):
         """
         Construct the INN
         """
-        self.inn = ff.SequenceINN(self.dims_in)
-        CouplingBlock, block_kwargs = self.get_coupling_block()
-        for i in range(self.params.get("n_blocks", 10)):
-            self.inn.append(
-                CouplingBlock, cond=0, cond_shape=(self.dims_c,), **block_kwargs
-            )
+        #self.inn = ff.SequenceINN(self.dims_in)
+        #CouplingBlock, block_kwargs = self.get_coupling_block()
+        #for i in range(self.params.get("n_blocks", 10)):
+        #    self.inn.append(
+        #        CouplingBlock, cond=0, cond_shape=(self.dims_c,), **block_kwargs
+        #    )
+
+        latent_space = self.params.get("latent_space", "gaussian")
+        if latent_space != "gaussian":
+            raise ValueError("Only gaussian latent space supported at the moment")
+
+        subnet_meta = {"units": self.params.get("internal_size", 16),
+                       "activation": self.params.get("activation", "relu"),
+                       "layers": self.params.get("layers_per_block", 3),
+                       "layer_constructor": VBLinear if self.bayesian else nn.Linear,
+                       "prior_prec": self.params.get("prior_prec", 1),
+                       "std_init": self.params.get("std_init", -9)}
+
+        coupling_type = self.params.get("coupling_type", "rational_quadratic")
+        if coupling_type == "rational_quadratic":
+            coupling_block = RationalQuadraticSplineBlock
+            coupling_block_kwargs = {"left": -1 * self.params.get("bounds", 10),
+                                     "right": self.params.get("bounds", 10),
+                                     "bottom": -1 * self.params.get("bounds", 10),
+                                     "top": self.params.get("bounds", 10),
+                                     "num_bins": self.params.get("num_bins", 10)}
+        elif coupling_type == "affine":
+            coupling_block = AffineCoupling
+            coupling_block_kwargs = {"clamp": self.params.get("affine_clamp", 2)}
+        else:
+            raise ValueError(f"coupling_type {coupling_type} unknown")
+
+        permutations = self.params.get("permutations", "soft")
+
+        self.inn = FlowMapping(
+            dims_in=self.dims_in,
+            dims_c=self.dims_c,
+            n_blocks=self.params.get("n_blocks", 10),
+            subnet_constructor=MLP,
+            subnet_meta=subnet_meta,
+            coupling_block=coupling_block,
+            coupling_kwargs=coupling_block_kwargs,
+            permutations=permutations
+        )
+
+
 
     def latent_log_prob(self, z: torch.Tensor) -> Union[torch.Tensor, float]:
         """
@@ -229,7 +348,7 @@ class INN(nn.Module):
         Returns:
             log probabilities, shape (n_events, ) if not bayesian
         """
-        z, jac = self.inn(x, (c,))
+        z, jac = self.inn(x, c)
         return self.latent_log_prob(z) + jac
 
     def sample(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -243,7 +362,8 @@ class INN(nn.Module):
             log_prob: log probabilites, shape (n_events, )
         """
         z = self.latent_dist.sample((c.shape[0],)).to(c.device, dtype=c.dtype)
-        x, jac = self.inn(z, (c,), rev=True)
+        #x, jac = self.inn(z, c, rev=True)
+        x, jac = self.inn.inverse(z, c)
         return x, self.latent_log_prob(z) - jac
 
     def sample_with_probs(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

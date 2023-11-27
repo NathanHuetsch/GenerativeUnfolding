@@ -124,20 +124,11 @@ def evaluation_generative(
         test_ll = model.dataset_loss(loader=loader)["loss"]
         print(f"    Result: {test_ll:.4f}")
 
-    if params.get("compute_test_loglikelihood", False):
-        print(f"    Computing log likelihood {name}")
-        try:
-            t0 = time.time()
-            test_ll = model.predict_loglikelihood(loader=loader).mean()
-            t1 = time.time()
-            time_diff = timedelta(seconds=round(t1 - t0))
-            print(f"    Finished log likelihood {name} calculation after {time_diff}. Result: {test_ll}")
-        except:
-            print(f"    Failed log likelihood {name} calculation")
-
     print(f"    Computing observables")
     data = process.get_data(data)
     observables = process.hard_observables()
+    data_hard_pp = model.input_data_preprocessed[0]
+    data_reco_pp = model.cond_data_preprocessed[0]
     plots = Plots(
         observables=observables,
         losses=model.losses,
@@ -145,6 +136,8 @@ def evaluation_generative(
         x_reco=data.x_reco,
         x_gen_single=x_gen_single,
         x_gen_dist=x_gen_dist,
+        x_hard_pp=data_hard_pp,
+        x_reco_pp=data_reco_pp,
         bayesian=model.model.bayesian,
         show_metrics=True
     )
@@ -156,6 +149,8 @@ def evaluation_generative(
     else:
         pickle_file = None
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
+
+    plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
     #print(f"    Plotting calibration")
     #plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
     #print(f"   Plotting pulls")
@@ -198,17 +193,6 @@ def evaluation_omnifold(
         print(f"    Computing test loss")
         test_ll = model.dataset_loss(loader=loader)["loss"]
         print(f"    Result: {test_ll:.4f}")
-
-    if params.get("compute_test_loglikelihood", False):
-        print(f"    Computing log likelihood {name}")
-        try:
-            t0 = time.time()
-            test_ll = model.predict_loglikelihood(loader=loader).mean()
-            t1 = time.time()
-            time_diff = timedelta(seconds=round(t1 - t0))
-            print(f"    Finished log likelihood {name} calculation after {time_diff}. Result: {test_ll}")
-        except:
-            print(f"    Failed log likelihood {name} calculation")
 
     print(f"    Computing observables")
     data = process.get_data(data)

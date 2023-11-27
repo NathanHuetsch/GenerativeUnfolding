@@ -9,7 +9,7 @@ import FrEIA.modules as fm
 from .spline_blocks import RationalQuadraticSplineBlock
 from .layers import VBLinear, MixtureDistribution
 from .madnis.models.flow import FlowMapping
-from .madnis.mappings.coupling.splines import RationalQuadraticSplineBlock
+#from .madnis.mappings.coupling.splines import RationalQuadraticSplineBlock
 from .madnis.mappings.coupling.linear import AffineCoupling
 
 
@@ -277,51 +277,56 @@ class INN(nn.Module):
         """
         Construct the INN
         """
-        #self.inn = ff.SequenceINN(self.dims_in)
-        #CouplingBlock, block_kwargs = self.get_coupling_block()
-        #for i in range(self.params.get("n_blocks", 10)):
-        #    self.inn.append(
-        #        CouplingBlock, cond=0, cond_shape=(self.dims_c,), **block_kwargs
-        #    )
+        self.madnis_inn = self.params.get("madnis_inn", False)
 
-        latent_space = self.params.get("latent_space", "gaussian")
-        if latent_space != "gaussian":
-            raise ValueError("Only gaussian latent space supported at the moment")
+        if not self.madnis_inn:
+            self.inn = ff.SequenceINN(self.dims_in)
+            CouplingBlock, block_kwargs = self.get_coupling_block()
+            for i in range(self.params.get("n_blocks", 10)):
+                self.inn.append(
+                    CouplingBlock, cond=0, cond_shape=(self.dims_c,), **block_kwargs
+                )
 
-        subnet_meta = {"units": self.params.get("internal_size", 16),
-                       "activation": self.params.get("activation", "relu"),
-                       "layers": self.params.get("layers_per_block", 3),
-                       "layer_constructor": VBLinear if self.bayesian else nn.Linear,
-                       "prior_prec": self.params.get("prior_prec", 1),
-                       "std_init": self.params.get("std_init", -9)}
+            return
 
-        coupling_type = self.params.get("coupling_type", "rational_quadratic")
-        if coupling_type == "rational_quadratic":
-            coupling_block = RationalQuadraticSplineBlock
-            coupling_block_kwargs = {"left": -1 * self.params.get("bounds", 10),
-                                     "right": self.params.get("bounds", 10),
-                                     "bottom": -1 * self.params.get("bounds", 10),
-                                     "top": self.params.get("bounds", 10),
-                                     "num_bins": self.params.get("num_bins", 10)}
-        elif coupling_type == "affine":
-            coupling_block = AffineCoupling
-            coupling_block_kwargs = {"clamp": self.params.get("affine_clamp", 2)}
         else:
-            raise ValueError(f"coupling_type {coupling_type} unknown")
+            latent_space = self.params.get("latent_space", "gaussian")
+            if latent_space != "gaussian":
+                raise ValueError("Only gaussian latent space supported at the moment")
 
-        permutations = self.params.get("permutations", "soft")
+            subnet_meta = {"units": self.params.get("internal_size", 16),
+                           "activation": self.params.get("activation", "relu"),
+                           "layers": self.params.get("layers_per_block", 3),
+                           "layer_constructor": VBLinear if self.bayesian else nn.Linear,
+                           "prior_prec": self.params.get("prior_prec", 1),
+                           "std_init": self.params.get("std_init", -9)}
 
-        self.inn = FlowMapping(
-            dims_in=self.dims_in,
-            dims_c=self.dims_c,
-            n_blocks=self.params.get("n_blocks", 10),
-            subnet_constructor=MLP,
-            subnet_meta=subnet_meta,
-            coupling_block=coupling_block,
-            coupling_kwargs=coupling_block_kwargs,
-            permutations=permutations
-        )
+            coupling_type = self.params.get("coupling_type", "rational_quadratic")
+            if coupling_type == "rational_quadratic":
+                coupling_block = RationalQuadraticSplineBlock
+                coupling_block_kwargs = {"left": -1 * self.params.get("bounds", 10),
+                                         "right": self.params.get("bounds", 10),
+                                         "bottom": -1 * self.params.get("bounds", 10),
+                                         "top": self.params.get("bounds", 10),
+                                         "num_bins": self.params.get("num_bins", 10)}
+            elif coupling_type == "affine":
+                coupling_block = AffineCoupling
+                coupling_block_kwargs = {"clamp": self.params.get("affine_clamp", 2)}
+            else:
+                raise ValueError(f"coupling_type {coupling_type} unknown")
 
+            permutations = self.params.get("permutations", "soft")
+
+            self.inn = FlowMapping(
+                dims_in=self.dims_in,
+                dims_c=self.dims_c,
+                n_blocks=self.params.get("n_blocks", 10),
+                subnet_constructor=MLP,
+                subnet_meta=subnet_meta,
+                coupling_block=coupling_block,
+                coupling_kwargs=coupling_block_kwargs,
+                permutations=permutations
+            )
 
 
     def latent_log_prob(self, z: torch.Tensor) -> Union[torch.Tensor, float]:
@@ -348,10 +353,13 @@ class INN(nn.Module):
         Returns:
             log probabilities, shape (n_events, ) if not bayesian
         """
-        z, jac = self.inn(x, c)
+        if not self.madnis_inn:
+            z, jac = self.inn(x, (c,))
+        else:
+            z, jac = self.inn(x, c)
         return self.latent_log_prob(z) + jac
 
-    def sample(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def sample(self, c: torch.Tensor) -> torch.Tensor:
         """
         Generates samples and log probabilities for the given condition
 
@@ -362,37 +370,11 @@ class INN(nn.Module):
             log_prob: log probabilites, shape (n_events, )
         """
         z = self.latent_dist.sample((c.shape[0],)).to(c.device, dtype=c.dtype)
-        #x, jac = self.inn(z, c, rev=True)
-        x, jac = self.inn.inverse(z, c)
-        return x, self.latent_log_prob(z) - jac
-
-    def sample_with_probs(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Generates samples and log probabilities for the given condition
-        For INNs this is equivalent to normal sampling
-        """
-        return self.sample(c)
-
-    def transform_hypercube(
-        self, r: torch.Tensor, c: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Computes values and jacobians for the given condition and numbers on the unit
-        hypercube
-
-        Args:
-            r: points on the the unit hypercube, shape (n_events, dims_in)
-            c: condition tensor, shape (n_events, dims_c)
-        Returns:
-            x: generated samples, shape (n_events, dims_in)
-            jac: jacobians, shape (n_events, )
-        """
-        if self.latent_space == "gaussian":
-            z = torch.erfinv(2 * r - 1) * math.sqrt(2)
-        elif self.latent_space == "uniform":
-            z = r
-        x, jac = self.inn(z, (c,), rev=True)
-        return x, -self.latent_log_prob(z) + jac
+        if not self.madnis_inn:
+            x, jac = self.inn(z, (c,), rev=True)
+        else:
+            x, jac = self.inn.inverse(z, c)
+        return x
 
     def kl(self) -> torch.Tensor:
         """

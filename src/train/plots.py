@@ -39,6 +39,8 @@ class Plots:
         x_reco: torch.Tensor,
         x_gen_single: torch.Tensor,
         x_gen_dist: torch.Tensor,
+        x_hard_pp=None,
+        x_reco_pp=None,
         bayesian: bool = False,
         show_metrics: bool = True
     ):
@@ -56,6 +58,9 @@ class Plots:
         """
         self.observables = observables
         self.losses = losses
+
+        self.x_hard_pp = x_hard_pp
+        self.x_reco_pp = x_reco_pp
 
         self.obs_hard = []
         self.obs_reco = []
@@ -292,6 +297,45 @@ class Plots:
                     self.hist_plot(
                         pp, lines, bins, obs, title=f"Event {i}", show_ratios=False
                     )
+
+    def plot_preprocessed(self, file: str):
+        """
+        Plots preprocessed observable distributions
+        Args:
+            file: Output file name
+        """
+
+        with PdfPages(file) as pp:
+            for obs, data_hard_pp, data_reco_pp in zip(
+                    self.observables, self.x_hard_pp.T, self.x_reco_pp.T
+            ):
+                bins = 100
+                y_hard, bins = np.histogram(data_hard_pp, bins=bins, density=True)
+                y_reco, _ = np.histogram(data_reco_pp, bins=bins, density=True)
+                #y_gen, y_gen_err = self.compute_hist_data(bins, data_gen, bayesian=self.bayesian)
+                normal = np.random.normal(size=data_hard_pp.shape)
+                y_normal, _ = np.histogram(normal, bins=bins, density=True)
+                lines = [
+                    Line(
+                        y=y_reco,
+                        y_err=None,
+                        label="Reco PP",
+                        color=self.colors[2],
+                    ),
+                    Line(
+                        y=y_hard,
+                        y_err=None,
+                        label="Hard PP",
+                        color=self.colors[0],
+                    ),
+                    Line(
+                        y=y_normal,
+                        y_err=None,
+                        label="Normal",
+                        color=self.colors[5],
+                    ),
+                ]
+                self.hist_plot(pp, lines, bins, obs, show_metrics=False, show_ratios=False, no_scale=True)
 
     def compute_hist_data(self, bins: np.ndarray, data: np.ndarray, bayesian=False, weights=None):
         if bayesian:

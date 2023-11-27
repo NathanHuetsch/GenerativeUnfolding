@@ -257,36 +257,6 @@ class Model:
                     total_losses[name].append(loss * n_samples)
         return {name: sum(losses) / n_total for name, losses in total_losses.items()}
 
-    def predict_loglikelihood(self, loader: torch.utils.data.DataLoader) -> torch.Tensor:
-        """
-        Predict the log likelihood for each event from the given dataloader
-
-        Returns:
-            tensor with log likelihoods, shape (n_events, )
-        """
-        self.model.eval()
-        bayesian_samples = self.params["bayesian_samples"] if self.model.bayesian else 1
-        with torch.no_grad():
-            all_loglikelihoods = []
-            for i in range(bayesian_samples):
-                logp_batches = []
-                if self.model.bayesian:
-                    self.model.reset_random_state()
-                for xs, cs in self.progress(
-                    loader,
-                    desc="  Generating",
-                    leave=False,
-                    initial=i * len(loader),
-                    total=bayesian_samples * len(loader),
-                ):
-                    logp_batches.append(self.model.log_prob(xs, cs))
-                all_loglikelihoods.append(torch.cat(logp_batches, dim=0))
-            all_loglikelihoods = torch.stack(all_loglikelihoods, dim=0)
-            if self.model.bayesian:
-                return all_loglikelihoods
-            else:
-                return all_loglikelihoods[0]
-
     def predict(self, loader=None) -> torch.Tensor:
         """
         Predict one sample for each event from the test data
@@ -320,7 +290,7 @@ class Model:
                 ):
                     while True:
                         try:
-                            data_batches.append(self.model.sample(cs)[0])
+                            data_batches.append(self.model.sample(cs))
                             break
                         except AssertionError:
                             print(f"    Batch failed, repeating")
@@ -365,7 +335,7 @@ class Model:
                     ):
                         while True:
                             try:
-                                data_batches.append(self.model.sample(cs)[0])
+                                data_batches.append(self.model.sample(cs))
                                 break
                             except AssertionError:
                                 print("Batch failed, repeating")
@@ -379,7 +349,6 @@ class Model:
                 )
             else:
                 return all_samples
-
 
     def save(self, name: str):
         """
@@ -461,6 +430,10 @@ class GenerativeUnfolding(Model):
             self.reco_pp.init_normalization(data[0].x_reco)
         self.input_data_preprocessed = tuple(self.hard_pp(subset.x_hard) for subset in data)
         self.cond_data_preprocessed = tuple(self.reco_pp(subset.x_reco) for subset in data)
+        #print([self.input_data_preprocessed[0][:, i].mean() for i in range(6)])
+        #print([self.input_data_preprocessed[0][:, i].std() for i in range(6)])
+        #print([self.input_data_preprocessed[0][:, i].min() for i in range(6)])
+        #print([self.input_data_preprocessed[0][:, i].max() for i in range(6)])
         super(GenerativeUnfolding, self).init_data_loaders(self.input_data_preprocessed, self.cond_data_preprocessed)
 
     def begin_epoch(self):
@@ -499,7 +472,7 @@ class GenerativeUnfolding(Model):
         """
         samples = super().predict(loader)
         samples_pp = self.hard_pp(
-            samples.reshape(-1, samples.shape[-1]), rev=True, jac=False, batch_size=1000
+            samples.reshape(-1, samples.shape[-1]), rev=True, batch_size=1000
         )
         return samples_pp.reshape(*samples.shape[:-1], *samples_pp.shape[1:])
 
@@ -514,7 +487,6 @@ class GenerativeUnfolding(Model):
         samples_pp = self.hard_pp(
             samples.reshape(-1, samples.shape[-1]),
             rev=True,
-            jac=False,
             batch_size=1000,
         )
         if self.model.bayesian:

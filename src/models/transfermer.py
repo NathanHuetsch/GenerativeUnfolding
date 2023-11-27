@@ -169,36 +169,7 @@ class Transfermer(nn.Module):
         else:
             return embedding_net(torch.cat((pp, one_hot), dim=2))
 
-    def log_prob(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """
-        Evaluate the log probability
-
-        Args:
-            x: input tensor, shape (n_events, dims_in)
-            c: condition tensor, shape (n_events, dims_c)
-        Returns:
-            log probabilities, shape (n_events, )
-        """
-
-        xp = nn.functional.pad(x[:, :-1], (0, 0, 1, 0))
-        embedding = self.transformer(
-            src=self.compute_embedding(
-                c,
-                n_particles=self.dims_c,
-                embedding_net=self.encoder_embedding_net,
-            ),
-            tgt=self.compute_embedding(
-                xp,
-                n_particles=self.dims_in + 1,
-                embedding_net=self.decoder_embedding_net,
-            ),
-            tgt_mask=torch.ones(
-                (xp.shape[1], xp.shape[1]), device=x.device, dtype=torch.bool
-            ).triu(diagonal=1),
-        )
-        return self.flow(x, embedding)
-
-    def sample(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def sample(self, c: torch.Tensor) -> torch.Tensor:
         """
         Generates samples and log probabilities for the given condition
 
@@ -206,13 +177,11 @@ class Transfermer(nn.Module):
             c: condition tensor, shape (n_events, dims_c)
         Returns:
             x: generated samples, shape (n_events, dims_in)
-            log_prob: log probabilites, shape (n_events, )
         """
         x = torch.zeros((c.shape[0], 1), device=c.device, dtype=c.dtype)
         c_emb = self.compute_embedding(
             c.unsqueeze(-1), n_particles=self.dims_c, embedding_net=self.encoder_embedding_net
         )
-        jac = 0
         for i in range(self.dims_in):
             embedding = self.transformer(
                 src=c_emb,
@@ -225,17 +194,9 @@ class Transfermer(nn.Module):
                     (x.shape[1], x.shape[1]), device=x.device, dtype=torch.bool
                 ).triu(diagonal=1),
             )
-            x_new, jac_new = self.flow.sample(embedding[:, -1:, :])
-            jac += jac_new
+            x_new, jac = self.flow.sample(embedding[:, -1:, :])
             x = torch.cat((x, x_new), dim=1)
-        return x[:, 1:], jac
-
-    def sample_with_probs(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Generates samples and log probabilities for the given condition
-        For INNs this is equivalent to normal sampling
-        """
-        return self.sample(c)
+        return x[:, 1:]
 
     def batch_loss(
         self, x: torch.Tensor, c: torch.Tensor, kl_scale: float = 0.0

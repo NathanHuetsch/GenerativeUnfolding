@@ -20,29 +20,21 @@ class PreprocTrafo(nn.Module):
         self,
         input_shape: Tuple[int, ...],
         output_shape: Tuple[int, ...],
-        invertible: bool,
-        has_jacobian: bool,
+        invertible: bool
     ):
         super().__init__()
         self.input_shape = input_shape
         self.output_shape = output_shape
         self.invertible = invertible
-        self.has_jacobian = has_jacobian
 
     def forward(
         self,
         x: torch.Tensor,
         rev: bool = False,
-        jac: bool = False,
-        return_jac: Optional[bool] = None,
         batch_size: int = 100000,
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
         if rev and not self.invertible:
             raise ValueError("Tried to call inverse of non-invertible transformation")
-        if jac and not self.has_jacobian:
-            raise ValueError(
-                "Tried to get jacobian from transformation without jacobian"
-            )
         input_shape, output_shape = (
             (self.output_shape, self.input_shape)
             if rev
@@ -55,21 +47,17 @@ class PreprocTrafo(nn.Module):
             )
 
         ybs = []
-        jbs = []
         for xb in x.split(batch_size, dim=0):
-            yb, jb = self.transform(xb, rev, jac)
+            yb = self.transform(xb, rev)
             ybs.append(yb)
-            jbs.append(jb)
-        y, j = torch.cat(ybs, dim=0), torch.cat(jbs, dim=0)
+        y = torch.cat(ybs, dim=0)
 
-        if not jac:
-            j = torch.zeros(x.shape[:1], dtype=x.dtype, device=x.device)
         if y.shape[1:] != output_shape:
             raise ValueError(
                 f"Wrong output shape. Expected {output_shape}, "
                 + f"got {tuple(y.shape[1:])}"
             )
-        return (y, j) if return_jac or (return_jac is None and jac) else y
+        return y
 
 
 class PreprocChain(PreprocTrafo):
@@ -78,7 +66,7 @@ class PreprocChain(PreprocTrafo):
         trafos: Iterable[PreprocTrafo],
         normalize: bool = True,
         n_dim: int = None,
-        unit_hypercube: bool = False
+        erf_norm_channels=[]
     ):
         if any(
             tp.output_shape != tn.input_shape
@@ -90,16 +78,17 @@ class PreprocChain(PreprocTrafo):
             )
 
         trafos.append(NormalizationPreproc((n_dim,)))
+        if len(erf_norm_channels) != 0:
+            trafos.append(ErfPreproc((n_dim,), channels=erf_norm_channels))
 
         super().__init__(
             trafos[0].input_shape,
             trafos[-1].output_shape,
-            all(t.invertible for t in trafos),
-            all(t.has_jacobian for t in trafos),
+            all(t.invertible for t in trafos)
         )
         self.trafos = nn.ModuleList(trafos)
         self.normalize = normalize
-        self.unit_hypercube = unit_hypercube
+        self.erf_norm = len(erf_norm_channels) != 0
 
     def init_normalization(self, x: torch.Tensor, batch_size: int = 100000):
         if not self.normalize:
@@ -112,24 +101,23 @@ class PreprocChain(PreprocTrafo):
         x = torch.cat(xbs, dim=0)
         norm_dims = tuple(range(len(x.shape)-1))
         x_mean = x.mean(dim=norm_dims, keepdims=True)
-        if self.unit_hypercube:
-            mins = torch.min(x-x.mean(dim=0), dim=0)[0]
-            maxs = torch.max(x-x.mean(dim=0), dim=0)[0]
-            x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
-        else:
-            x_std = x.std(dim=norm_dims, keepdims=True)
+        #if self.unit_hypercube:
+        #    mins = torch.min(x-x.mean(dim=0), dim=0)[0]
+        #    maxs = torch.max(x-x.mean(dim=0), dim=0)[0]
+        #    x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
+        #else:
+        x_std = x.std(dim=norm_dims, keepdims=True)
         self.mean = x_mean
         self.std = x_std
-        self.trafos[-1].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
+        if self.erf_norm:
+            self.trafos[-2].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
+        else:
+            self.trafos[-1].set_norm(x_mean[0].expand(x.shape[1:]), x_std[0].expand(x.shape[1:]))
 
-    def transform(
-        self, x: torch.Tensor, rev: bool, jac: bool
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        j_all = torch.zeros(x.shape[:1], dtype=x.dtype, device=x.device)
+    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
         for t in reversed(self.trafos) if rev else self.trafos:
-            x, j = t(x, rev=rev, jac=jac, return_jac=True)
-            j_all = j_all + j
-        return x, j_all
+            x = t(x, rev=rev)
+        return x
 
 
 class NormalizationPreproc(PreprocTrafo):
@@ -137,49 +125,128 @@ class NormalizationPreproc(PreprocTrafo):
         self,
         shape: Tuple[int, ...]
     ):
-        super().__init__(
-            input_shape=shape, output_shape=shape, invertible=True, has_jacobian=True
-        )
+        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
         self.mean = nn.Parameter(torch.zeros(shape), requires_grad=False)
         self.std = nn.Parameter(torch.ones(shape), requires_grad=False)
-        self.jac = nn.Parameter(torch.tensor(0.0), requires_grad=False)
 
     def set_norm(self, mean: torch.Tensor, std: torch.Tensor):
         with torch.no_grad():
             self.mean.data.copy_(mean)
             self.std.data.copy_(std)
-            self.jac.data.copy_(std.log().sum())
 
-    def transform(
-        self, x: torch.Tensor, rev: bool, jac: bool
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
         if rev:
-            z, jac = x * self.std + self.mean, self.jac
+            z = x * self.std + self.mean
         else:
-            z, jac = (x - self.mean) / self.std, -self.jac
-
-        return z, jac.expand(x.shape[0])
+            z = (x - self.mean) / self.std
+        return z
 
 
 class UniformNoisePreprocessing(PreprocTrafo):
     def __init__(self, shape: Tuple[int, ...], channels):
 
-        super().__init__(
-            input_shape=shape, output_shape=shape, invertible=True, has_jacobian=True
-        )
+        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
         self.channels = channels
 
-    def transform(
-        self, x: torch.Tensor, rev: bool, jac: bool
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
         if rev:
-            z, jac = x, torch.tensor([0])
+            z = x
             z[:, self.channels] = torch.round(z[:, self.channels])
         else:
-            z, jac = x, torch.tensor([0])
+            z = x
             noise = torch.rand_like(z[:, self.channels])-0.5
             z[:, self.channels] = z[:, self.channels] + noise
-        return z, jac.expand(x.shape[0])
+        return z
+
+
+class ErfPreproc(PreprocTrafo):
+    def __init__(
+        self,
+        shape: Tuple[int, ...], channels
+    ):
+        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
+        self.channels = channels
+
+    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
+        if rev:
+            z = x
+            z[:, self.channels] = torch.erf(z[:, self.channels]) + .001
+        else:
+            z = x
+            z[:, self.channels] = torch.erfinv(z[:, self.channels] - .001)
+        return z
+
+
+class CubicRootPreproc(PreprocTrafo):
+    def __init__(
+        self,
+        shape: Tuple[int, ...], channels
+    ):
+        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
+        self.channels = channels
+
+    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
+        if rev:
+            z = x
+            z[:, self.channels] = z[:, self.channels] ** 3
+        else:
+            z = x
+            z[:, self.channels] = np.cbrt(z[:, self.channels])# ** (1./3.)
+        return z
+
+
+class LogPreproc(PreprocTrafo):
+    def __init__(
+        self,
+        shape: Tuple[int, ...], channels
+    ):
+        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
+        self.channels = channels
+
+    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
+        if rev:
+            z = x
+            z[:, self.channels] = z[:, self.channels].exp()
+            z[:, 3] = -1 * z[:, 3].exp()
+        else:
+            z = x
+            z[:, self.channels] = (z[:, self.channels]).log()
+            z[:, 3] = (-1 * z[:, 3]).log()
+        return z
+
+
+class SpecialPreproc(PreprocTrafo):
+    def __init__(
+        self,
+        shape: Tuple[int, ...]
+    ):
+        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
+
+    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
+        if rev:
+            z = x
+            z4 = z[:, 4]
+            #z4 = z4*self.std2 + self.mean2
+            z4 = torch.erf(z4)
+            z4 = z4/1.1
+            z4 = z4+self.mean1
+            z4 = z4.exp()
+            z4 = torch.where(z4 < 0.1, 0, z4)
+            z[:, 4] = z4
+        else:
+            z = x
+            z4 = z[:, 4]
+            noise = torch.rand(size=z4.shape)/100. + 0.09
+            z4 = torch.where(z4 < 0.1, noise, z4)
+            z4 = z4.log()
+            self.mean1 = z4.mean()
+            z4 = z4-self.mean1
+            z4 = z4*1.1
+            z4 = torch.erfinv(z4)
+            #self.mean2, self.std2 = z4.mean(), z4.std()
+            #z4 = (z4-self.mean2)/self.std2
+            z[:, 4] = z4
+        return z
 
 
 def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
@@ -192,16 +259,27 @@ def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
         Preprocessing chain
     """
     normalize = True
-    unit_hypercube = params.get("unit_hypercube", False)
+
     uniform_noise_channels = params.get("uniform_noise_channels", [])
+    erf_norm_channels = params.get("erf_norm_channels", [])
+    cubic_root_channels = params.get("cubic_root_channels", [])
+    log_channels = params.get("log_channels", [])
 
     trafos = []
     if len(uniform_noise_channels) != 0:
         trafos.append(UniformNoisePreprocessing(shape=(n_dim,), channels=uniform_noise_channels))
 
+    if len(cubic_root_channels) != 0:
+        trafos.append(CubicRootPreproc(shape=(n_dim,), channels=cubic_root_channels))
+
+    if len(log_channels) != 0:
+        trafos.append(LogPreproc(shape=(n_dim,), channels=log_channels))
+
+    trafos.append(SpecialPreproc(shape=(n_dim,)))
+
     return PreprocChain(
         trafos,
         normalize=normalize,
         n_dim=n_dim,
-        unit_hypercube=unit_hypercube
+        erf_norm_channels=erf_norm_channels
     )

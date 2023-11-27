@@ -53,28 +53,6 @@ class FreeFormFlow(nn.Module):
             size_out=self.dims_in
         )
 
-
-    def latent_log_prob(self, z: torch.Tensor) -> Union[torch.Tensor, float]:
-        """
-        Returns the log probability for a tensor in latent space
-
-        Args:
-            z: latent space tensor, shape (n_events, dims_in)
-        Returns:
-            log probabilities, shape (n_events, )
-        """
-        if self.latent_space == "gaussian":
-            return -(z**2 / 2 + 0.5 * math.log(2 * math.pi)).sum(dim=1)
-        elif self.latent_space == "uniform":
-            return 0.0
-
-    def log_prob(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        batch_size = x.size(0)
-        dtype = x.dtype
-        device = x.device
-        pass
-
-
     def sample(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size = c.size(0)
         dtype = c.dtype
@@ -82,14 +60,7 @@ class FreeFormFlow(nn.Module):
         z = torch.randn((batch_size, self.dims_in), dtype=dtype, device=device)
         x = self.decoder(torch.cat([z, c], dim=-1))
 
-        return x, torch.Tensor([0])
-
-    def sample_with_probs(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size = c.size(0)
-        dtype = c.dtype
-        device = c.device
-
-        pass
+        return x
 
     def kl(self) -> torch.Tensor:
         """

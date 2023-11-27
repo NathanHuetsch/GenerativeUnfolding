@@ -207,11 +207,13 @@ class LogPreproc(PreprocTrafo):
         if rev:
             z = x
             z[:, self.channels] = z[:, self.channels].exp()
-            z[:, 3] = -1 * z[:, 3].exp()
+            if 3 in self.channels:
+                z[:, 3] = -1 * z[:, 3]
         else:
             z = x
+            if 3 in self.channels:
+                z[:, 3] = -1 * z[:, 3]
             z[:, self.channels] = (z[:, self.channels]).log()
-            z[:, 3] = (-1 * z[:, 3]).log()
         return z
 
 

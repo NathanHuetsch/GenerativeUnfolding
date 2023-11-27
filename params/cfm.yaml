@@ -15,9 +15,11 @@ process_params:
 hard_preprocessing:
   # add uniform noise [-0.5, 0.5] to these channels
   uniform_noise_channels: []
+  unit_hypercube: True
   erf_norm: True
 reco_preprocessing:
   uniform_noise_channels: []
+  unit_hypercube: True
   erf_norm: True
 
 # Training

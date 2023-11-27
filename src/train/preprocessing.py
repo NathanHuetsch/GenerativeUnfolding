@@ -117,12 +117,11 @@ class PreprocChain(PreprocTrafo):
         x = torch.cat(xbs, dim=0)
         norm_dims = tuple(range(len(x.shape)-1))
         x_mean = x.mean(dim=norm_dims, keepdims=True)
+        x_std = x.std(dim=norm_dims, keepdims=True)
         if self.unit_hypercube:
             mins = torch.min(x-x.mean(dim=0), dim=0)[0]
             maxs = torch.max(x-x.mean(dim=0), dim=0)[0]
-            x_std = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
-        else:
-            x_std = x.std(dim=norm_dims, keepdims=True)
+            x_std[:, 4] = 1.001*torch.where(maxs[4] > torch.abs(mins[4]), maxs[4], torch.abs(mins[4])).unsqueeze(0)
         self.mean = x_mean
         self.std = x_std
         if self.erf_norm:
@@ -213,10 +212,12 @@ class ErfPreproc(PreprocTrafo):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if rev:
             z, jac = x, self.jac,
-            z[:, 4], jac = torch.erf(z[:, 4]) + .001, self.jac
+            z[:, 4], jac = torch.erf(z[:, 4]), self.jac
         else:
             z, jac = x, -self.jac
-            z[:, 4], jac = torch.erfinv(z[:, 4] - .001), -self.jac
+            #print("before erfinv:", z[:, 4].max(), z[:, 4].min())
+            z[:, 4], jac = torch.erfinv(z[:, 4]), -self.jac # torch.erfinv(torch.clamp(z[:, 4], min=-0.999, max=0.999)), -self.jac
+            #print("after erfinv:", z[:, 4].max(), z[:, 4].min())
 
         return z, jac.expand(x.shape[0])  # TODO: fix jacobians
 
@@ -231,7 +232,7 @@ def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
         Preprocessing chain
     """
     normalize = True
-    unit_hypercube = params.get("unit_hypercube", False),
+    unit_hypercube = params.get("unit_hypercube", False)
     erf_norm = params.get("erf_norm", False)
     uniform_noise_channels = params.get("uniform_noise_channels", [])
 

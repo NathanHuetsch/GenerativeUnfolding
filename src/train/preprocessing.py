@@ -230,7 +230,7 @@ class SpecialPreproc(PreprocTrafo):
             z4 = z[:, 4]
             #z4 = z4*self.std2 + self.mean2
             z4 = torch.erf(z4)
-            z4 = z4/1.1
+            z4 = z4*1.001*self.std1
             z4 = z4+self.mean1
             z4 = z4.exp()
             z4 = torch.where(z4 < 0.1, 0, z4)
@@ -238,143 +238,16 @@ class SpecialPreproc(PreprocTrafo):
         else:
             z = x
             z4 = z[:, 4]
-            noise = torch.rand(size=z4.shape)/100. + 0.09
+            noise = torch.rand(size=z4.shape)*.003 + 0.097
             z4 = torch.where(z4 < 0.1, noise, z4)
             z4 = z4.log()
             self.mean1 = z4.mean()
-            z4 = z4-self.mean1
-            z4 = z4*1.1
-            z4 = torch.erfinv(z4)
-            #self.mean2, self.std2 = z4.mean(), z4.std()
-            #z4 = (z4-self.mean2)/self.std2
-            z[:, 4] = z4
-        return z
-
-
-class ErfPreproc(PreprocTrafo):
-    def __init__(
-        self,
-        shape: Tuple[int, ...]
-    ):
-        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
-        self.mean = nn.Parameter(torch.zeros(shape), requires_grad=False)
-        self.std = nn.Parameter(torch.ones(shape), requires_grad=False)
-
-    def set_norm(self, mean: torch.Tensor, std: torch.Tensor):
-        with torch.no_grad():
-            self.mean.data.copy_(mean)
-            self.std.data.copy_(std)
-
-    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
-        if rev:
-            z = x * self.std + self.mean
-        else:
-            z = (x - self.mean) / self.std
-        return z
-
-
-class UniformNoisePreprocessing(PreprocTrafo):
-    def __init__(self, shape: Tuple[int, ...], channels):
-
-        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
-        self.channels = channels
-
-    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
-        if rev:
-            z = x
-            z[:, self.channels] = torch.round(z[:, self.channels])
-        else:
-            z = x
-            noise = torch.rand_like(z[:, self.channels])-0.5
-            z[:, self.channels] = z[:, self.channels] + noise
-        return z
-
-
-class ErfPreproc(PreprocTrafo):
-    def __init__(
-        self,
-        shape: Tuple[int, ...], channels
-    ):
-        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
-        self.channels = channels
-
-    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
-        if rev:
-            z = x
-            z[:, self.channels] = torch.erf(z[:, self.channels]) + .001
-        else:
-            z = x
-            z[:, self.channels] = torch.erfinv(z[:, self.channels] - .001)
-        return z
-
-
-class CubicRootPreproc(PreprocTrafo):
-    def __init__(
-        self,
-        shape: Tuple[int, ...], channels
-    ):
-        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
-        self.channels = channels
-
-    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
-        if rev:
-            z = x
-            z[:, self.channels] = z[:, self.channels] ** 3
-        else:
-            z = x
-            z[:, self.channels] = np.cbrt(z[:, self.channels])# ** (1./3.)
-        return z
-
-
-class LogPreproc(PreprocTrafo):
-    def __init__(
-        self,
-        shape: Tuple[int, ...], channels
-    ):
-        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
-        self.channels = channels
-
-    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
-        if rev:
-            z = x
-            z[:, self.channels] = z[:, self.channels].exp()
-            if 3 in self.channels:
-                z[:, 3] = -1 * z[:, 3]
-        else:
-            z = x
-            if 3 in self.channels:
-                z[:, 3] = -1 * z[:, 3]
-            z[:, self.channels] = (z[:, self.channels]).log()
-        return z
-
-
-class SpecialPreproc(PreprocTrafo):
-    def __init__(
-        self,
-        shape: Tuple[int, ...]
-    ):
-        super().__init__(input_shape=shape, output_shape=shape, invertible=True)
-
-    def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
-        if rev:
-            z = x
-            z4 = z[:, 4]
-            #z4 = z4*self.std2 + self.mean2
-            z4 = torch.erf(z4)
-            z4 = z4/1.1
-            z4 = z4+self.mean1
-            z4 = z4.exp()
-            z4 = torch.where(z4 < 0.1, 0, z4)
-            z[:, 4] = z4
-        else:
-            z = x
-            z4 = z[:, 4]
-            noise = torch.rand(size=z4.shape)/100. + 0.09
-            z4 = torch.where(z4 < 0.1, noise, z4)
-            z4 = z4.log()
-            self.mean1 = z4.mean()
-            z4 = z4-self.mean1
-            z4 = z4*1.1
+            mins = torch.min(z4)
+            maxs = torch.max(z4)
+            center = (mins + maxs) / 2
+            z4 = z4-center
+            self.std1 = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
+            z4 = z4/(1.001*self.std1)
             z4 = torch.erfinv(z4)
             #self.mean2, self.std2 = z4.mean(), z4.std()
             #z4 = (z4-self.mean2)/self.std2

@@ -265,6 +265,8 @@ def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
     cubic_root_channels = params.get("cubic_root_channels", [])
     log_channels = params.get("log_channels", [])
 
+    special_preproc = params.get("special_preproc", False)
+
     trafos = []
     if len(uniform_noise_channels) != 0:
         trafos.append(UniformNoisePreprocessing(shape=(n_dim,), channels=uniform_noise_channels))
@@ -275,7 +277,8 @@ def build_preprocessing(params: dict, n_dim: int) -> PreprocChain:
     if len(log_channels) != 0:
         trafos.append(LogPreproc(shape=(n_dim,), channels=log_channels))
 
-    trafos.append(SpecialPreproc(shape=(n_dim,)))
+    if special_preproc:
+        trafos.append(SpecialPreproc(shape=(n_dim,)))
 
     return PreprocChain(
         trafos,

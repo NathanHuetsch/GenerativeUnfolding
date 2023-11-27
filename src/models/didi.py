@@ -97,14 +97,8 @@ class DirectDiffusion(CFM):
 
             x_t = self.solver(net_wrapper, x_1, reverse=True)
 
-        # return the generated sample. This function does not calculate jacobians and just returns a 0 instead
-        return x_t[-1], torch.Tensor([0])
-
-    def sample_with_probs(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        raise NotImplementedError("Direct Diffusion does not allow likelihood calculation")
-
-    def log_prob(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError("Direct Diffusion does not allow likelihood calculation")
+        # return the generated samples
+        return x_t[-1]
 
     def batch_loss(
         self, x_0: torch.Tensor, x_1: torch.Tensor, kl_scale: float = 0.0

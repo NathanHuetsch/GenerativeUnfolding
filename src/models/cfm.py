@@ -170,65 +170,6 @@ class CFM(nn.Module):
             self.solver = SDEsolver(params=self.params.get("solver_params", {}))
             #self.SDE = SDE(self)
 
-
-    def latent_log_prob(self, z: torch.Tensor) -> Union[torch.Tensor, float]:
-        """
-        Returns the log probability for a tensor in latent space
-
-        Args:
-            z: latent space tensor, shape (n_events, dims_in)
-        Returns:
-            log probabilities, shape (n_events, )
-        """
-        if self.latent_space == "gaussian":
-            return -(z**2 / 2 + 0.5 * math.log(2 * math.pi)).sum(dim=1)
-        elif self.latent_space == "uniform":
-            return 0.0
-        elif self.latent_space == "mixture":
-            return -(z[:, self.normal_channels] ** 2 / 2 + 0.5 * math.log(2 * math.pi)).sum(dim=1)
-
-    def log_prob(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """
-        Evaluate the log probability
-
-        Args:
-            x: input tensor, shape (n_events, dims_in)
-            c: condition tensor, shape (n_events, dims_c)
-        Returns:
-            log probabilities, shape (n_events, ) if not bayesian
-                               shape (1+self.bayesian_samples, n_events) if bayesian
-        """
-
-        batch_size = x.size(0)
-        dtype = x.dtype
-        device = x.device
-
-        # Wrap the network such that the ODE solver can call it
-        def net_wrapper(t, state):
-            with torch.set_grad_enabled(True):
-                # Prepare the network inputs
-                x_t = self.x_embedding(state[0].detach().requires_grad_(True))
-                t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device).requires_grad_(False))
-                # Predict v
-                v = self.net(t, x_t, c)
-                # Calculate the jacobian trace
-                if self.hutch:
-                    dlogp_dt = -hutch_trace(v, x_t).view(-1, 1)
-                else:
-                    dlogp_dt = -autograd_trace(v, x_t).view(-1, 1)
-            return v.detach(), dlogp_dt.detach()
-
-        # Set initial conditions for the ODE
-        logp_diff_1 = torch.zeros((batch_size, 1), dtype=dtype, device=device)
-        states = (x, logp_diff_1)
-        c = self.c_embedding(c.requires_grad_(False))
-        # Solve the ODE from t=0 to t=1 from data to noise
-        x_t, logp_diff_t = self.solver(net_wrapper, states)
-        # Extract the latent space points and the jacobians
-        x_1 = x_t[-1].detach()
-        jac = logp_diff_t[-1].detach()
-        return self.latent_log_prob(x_1).squeeze() - jac.squeeze()
-
     def sample(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Generates samples for the given condition
@@ -259,47 +200,7 @@ class CFM(nn.Module):
             x_1 = self.latent_dist.sample((batch_size, )).to(device, dtype=dtype)
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
             x_t = self.solver(net_wrapper, x_1, reverse=True)
-        # return the generated sample. This function does not calculate jacobians and just returns a 0 instead
-        return x_t[-1], torch.Tensor([0])
-
-    def sample_with_probs(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Generates samples and log probabilities for the given condition
-
-        Args:
-            c: condition tensor, shape (n_events, dims_c)
-        Returns:
-            x: generated samples, shape (n_events, dims_in)
-            log_prob: log probabilites, shape (n_events, )
-        """
-        batch_size = c.size(0)
-        dtype = c.dtype
-        device = c.device
-
-        # Wrap the network such that the ODE solver can call it
-        def net_wrapper(t, state):
-            with torch.set_grad_enabled(True):
-                x_t = self.x_embedding(state[0].requires_grad_(True))
-                t = self.t_embedding((t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device)).requires_grad_(False))
-                # Predict v
-                v = self.net(t, x_t, c)
-                if self.hutch:
-                    dlogp_dt = -hutch_trace(v, x_t).view(-1, 1)
-                else:
-                    dlogp_dt = -autograd_trace(v, x_t).view(-1, 1)
-            return v.detach(), dlogp_dt.detach()
-
-        # Sample from the latent distribution and prepare initial state of ODE solver
-        x_1 = self.latent_dist.sample((batch_size, )).to(device, dtype=dtype)
-        logp_diff_1 = torch.zeros((batch_size, 1), dtype=dtype, device=device)
-        states = (x_1, logp_diff_1)
-        c = self.c_embedding(c.requires_grad_(False))
-        # Solve the ODE from t=1 to t=0 from the sampled initial condition
-        x_t, logp_diff_t = self.solver(net_wrapper, states, reverse=True)
-        # Extract the generated samples and the jacobians
-        x_0 = x_t[-1].detach()
-        jac = logp_diff_t[-1].detach()
-        return x_0, self.latent_log_prob(x_1).squeeze() + jac.squeeze()
+        return x_t[-1]
 
     def batch_loss(
         self, x: torch.Tensor, c: torch.Tensor, kl_scale: float = 0.0
@@ -550,69 +451,4 @@ class CFMwithTransformer(CFM):
             x_1 = torch.randn((batch_size, self.dims_in), dtype=dtype, device=device)
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
             x_t = self.solver(net_wrapper, x_1, reverse=True)
-        # return the generated sample. This function does not calculate jacobians and just returns a 0 instead
-        return x_t[-1], torch.Tensor([0])
-
-    def log_prob(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """
-        Evaluate the log probability
-
-        Args:
-            x: input tensor, shape (n_events, dims_in)
-            c: condition tensor, shape (n_events, dims_c)
-        Returns:
-            log probabilities, shape (n_events, ) if not bayesian
-                               shape (1+self.bayesian_samples, n_events) if bayesian
-        """
-
-        batch_size = x.size(0)
-        dtype = x.dtype
-        device = x.device
-
-        # Wrap the network such that the ODE solver can call it
-        def net_wrapper(t, state):
-            with torch.set_grad_enabled(True):
-                # Prepare the network inputs
-                x_t = state[0].detach().requires_grad_(True)
-                t = t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device).requires_grad_(False)
-                embedding = self.transformer.decoder(
-                    self.compute_embedding(
-                        x_t,
-                        n_components=self.dims_in,
-                        t=t
-                    ),
-                    memory
-                )
-                # Predict v
-                v = self.net(torch.cat([t.unsqueeze(-1).repeat(1, x_t.size(1), 1), embedding], dim=-1)).squeeze()
-                # Calculate the jacobian trace
-                if self.hutch:
-                    dlogp_dt = -hutch_trace(v, x_t).view(-1, 1)
-                else:
-                    dlogp_dt = -autograd_trace(v, x_t).view(-1, 1)
-            return v.detach(), dlogp_dt.detach()
-
-        # Set initial conditions for the ODE
-        logp_diff_1 = torch.zeros((batch_size, 1), dtype=dtype, device=device)
-        states = (x, logp_diff_1)
-
-        memory = self.transformer.encoder(self.compute_embedding(
-            c,
-            n_components=self.dims_c
-        )).requires_grad_(False)
-
-        # Solve the ODE from t=0 to t=1 from data to noise
-        x_t, logp_diff_t = odeint(
-            net_wrapper,
-            states,
-            torch.tensor([self.t_min, self.t_max], dtype=dtype, device=device),
-            atol=self.atol,
-            rtol=self.rtol,
-            method=self.method,
-            options=dict(step_size=self.step_size)
-            )
-        # Extract the latent space points and the jacobians
-        x_1 = x_t[-1].detach()
-        jac = logp_diff_t[-1].detach()
-        return self.latent_log_prob(x_1).squeeze() - jac.squeeze()
-
+        return x_t[-1]

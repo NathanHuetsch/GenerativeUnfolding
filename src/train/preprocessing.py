@@ -230,27 +230,22 @@ class SpecialPreproc(PreprocTrafo):
             z4 = z[:, 4]
             #z4 = z4*self.std2 + self.mean2
             z4 = torch.erf(z4)
-            z4 = z4*1.001*self.std1
-            z4 = z4+self.mean1
+            z4 = z4*self.factor
+            z4 = z4+self.shift
             z4 = z4.exp()
             z4 = torch.where(z4 < 0.1, 0, z4)
             z[:, 4] = z4
         else:
             z = x
             z4 = z[:, 4]
-            noise = torch.rand(size=z4.shape)*.003 + 0.097
+            noise = torch.rand(size=z4.shape)/1000. * 3 + 0.097
             z4 = torch.where(z4 < 0.1, noise, z4)
             z4 = z4.log()
-            self.mean1 = z4.mean()
-            mins = torch.min(z4)
-            maxs = torch.max(z4)
-            center = (mins + maxs) / 2
-            z4 = z4-center
-            self.std1 = torch.where(maxs > torch.abs(mins), maxs, torch.abs(mins)).unsqueeze(0)
-            z4 = z4/(1.001*self.std1)
+            self.shift = (z4.max() + z4.min())/2.
+            z4 = z4-self.shift
+            self.factor = max(z4.max(), -1 * z4.min())*1.001
+            z4 = z4/self.factor
             z4 = torch.erfinv(z4)
-            #self.mean2, self.std2 = z4.mean(), z4.std()
-            #z4 = (z4-self.mean2)/self.std2
             z[:, 4] = z4
         return z
 

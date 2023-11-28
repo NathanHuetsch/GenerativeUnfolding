@@ -13,6 +13,7 @@ def GetEMD(ref, array, weights_arr=None, nboot=100):
         array_boot = array[arr_idx]
         w_boot = weights_arr[arr_idx]
         ds.append(10*wasserstein_distance(ref, array_boot, v_weights=w_boot))
+        #ds.append(10*wasserstein_distance(ref, array, v_weights=w_boot))
     return np.mean(ds), np.std(ds)
 
 

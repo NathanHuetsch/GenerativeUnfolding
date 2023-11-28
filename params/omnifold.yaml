@@ -14,8 +14,10 @@ process_params:
 # Preprocessing
 hard_preprocessing:
   uniform_noise_channels: []
+  erf_norm: False
 reco_preprocessing:
   uniform_noise_channels: []
+  erf_norm: False
 
 # Training
 lr: 1.e-3

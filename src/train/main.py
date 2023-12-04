@@ -184,9 +184,9 @@ def evaluate_comparison(
     name: str = "comparison"):
 
     print(f"Checkpoint: {model_name},  Data: Comparison Set")
-    data_reco = torch.tensor(np.load('/Users/huetsch/Desktop/SBresults/SB_Pythia_reco.npy'))
-    data_hard = torch.tensor(np.load('/Users/huetsch/Desktop/SBresults/SB_Pythia_hard.npy'))
-    data_SB = torch.tensor(np.load('/Users/huetsch/Desktop/SBresults/SB_Pythia_unfold.npy'))
+    data_reco = torch.tensor(np.load('data/SB_Pythia_reco.npy'))
+    data_hard = torch.tensor(np.load('data/SB_Pythia_hard.npy'))
+    data_SB = torch.tensor(np.load('data/SB_Pythia_unfold.npy'))
 
     loader_kwargs = {"shuffle": False, "batch_size": 10*params["batch_size"], "drop_last": False}
     loader = torch.utils.data.DataLoader(

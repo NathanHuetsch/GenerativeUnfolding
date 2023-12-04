@@ -1,0 +1,43 @@
+run_name: 30e_moreTests
+run_folder: Transfermer
+
+method: GenerativeUnfolding
+process_params:
+  train_slice: [0., 0.6]
+  val_slice: [0.6, 0.65]
+  test_slice: [0.65, 1.0]
+  training_file: "data/Pythia26_full.npz"
+  analysis_file: "data/Herwig_full.npz"
+
+# Preprocessing
+hard_preprocessing:
+  type:
+  unit_hypercube: False
+  args:
+    pt_conserved: True
+reco_preprocessing:
+  type:
+
+# Training
+lr: 1.e-3
+max_lr: 3.e-4
+batch_size: 128
+lr_scheduler: cosine_annealing
+epochs: 30
+
+# Architecture
+model: Transfermer
+bayesian: False
+
+internal_size: 48
+num_bins: 6
+dropout: 0.0
+dim_embedding: 16
+n_head: 4
+n_encoder_layers: 2
+n_decoder_layers: 2
+dim_feedforward: 32
+embedding_nets: False
+
+evaluate_train: False
+evaluate_analysis: False

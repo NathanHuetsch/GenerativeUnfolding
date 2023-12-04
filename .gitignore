@@ -1,15 +1,13 @@
 output/
-params/
 run_scripts/
 data/
 runfiles/
 
 # Byte-compiled / optimized / DLL files
-__pycache__/
 *.py[cod]
 *$py.class
 *.DS_Store
-
+**__pycache__**
 
 # C extensions
 *.so

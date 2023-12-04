@@ -8,4 +8,4 @@ export CUDA_VISIBLE_DEVICES=$(cat $PBS_GPUFILE | sed s/.*-gpu// )
 source GenUnfold/bin/activate
 cd GenerativeUnfolding
 
-src train params/inn_sigmoidtest.yaml $1
+src train params/inn.yaml $1

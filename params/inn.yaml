@@ -1,10 +1,11 @@
-run_name: test
+run_name: trash
 run_folder: INN/rqs
 
 method: GenerativeUnfolding
 
 process: ZJetsGenerative
 process_params:
+  #loader: ours
   train_slice: [0., 0.6]
   val_slice: [0.6, 0.65]
   test_slice: [0.65, 1.0]
@@ -14,9 +15,17 @@ process_params:
 # Preprocessing
 hard_preprocessing:
   # add uniform noise [-0.5, 0.5] to these channels
-  uniform_noise_channels: [2]
+  #uniform_noise_channels: [2]
+  #erf_norm_channels: []
+  #cubic_root_channels: [0, 1, 2, 3]
+  #log_channels: [0, 1, 2]
+  special_preproc: True
 reco_preprocessing:
-  uniform_noise_channels: [2]
+  #uniform_noise_channels: [2]
+  #erf_norm_channels: []
+  #cubic_root_channels: [0, 1, 2, 3]
+  #log_channels: [0, 1, 2]
+  special_preproc: True
 
 # Training
 lr: 1.e-3
@@ -25,7 +34,7 @@ batch_size: 128
 lr_scheduler: cosine_annealing
 weight_decay: 0.
 betas: [0.9, 0.999]
-epochs: 30
+epochs: 0
 
 # Architecture
 model: INN
@@ -39,9 +48,11 @@ n_blocks: 10
 internal_size: 16
 layers_per_block: 3
 coupling_type: rational_quadratic
-permute_soft: False
+permutations: soft
+permute_soft: True
 num_bins: 6
 dropout: 0.0
 
 evaluate_train: False
-evaluate_analysis: True
+evaluate_analysis: False
+evaluate_comparison: True

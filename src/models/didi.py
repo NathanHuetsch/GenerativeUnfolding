@@ -65,7 +65,7 @@ class DirectDiffusion(CFM):
             self.mod_t = self.params.get("mod_t", False)
             print(f"        t distribution: uniform")
 
-    def sample(self, x_1: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def sample(self, x_0: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Generates samples for the given condition
 
@@ -74,13 +74,13 @@ class DirectDiffusion(CFM):
         Returns:
             x: generated samples, shape (n_events, dims_in)
         """
-        dtype = x_1.dtype
-        device = x_1.device
+        dtype = x_0.dtype
+        device = x_0.device
 
         with torch.no_grad():
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
             if self.give_x1:
-                x_1_embedded = self.x_embedding(x_1)
+                x_1_embedded = self.x_embedding(x_0)
 
             # Wrap the network such that the ODE solver can call it
             if self.solver_type == "ODE":
@@ -95,13 +95,13 @@ class DirectDiffusion(CFM):
             else:
                 net_wrapper = SDE_wrapper(self, condition=None)
 
-            x_t = self.solver(net_wrapper, x_1, reverse=True)
+            x_t = self.solver(net_wrapper, x_0, reverse=False)
 
         # return the generated samples
         return x_t[-1]
 
     def batch_loss(
-        self, x_0: torch.Tensor, x_1: torch.Tensor, kl_scale: float = 0.0
+        self, x_1: torch.Tensor, x_0: torch.Tensor, kl_scale: float = 0.0
     ) -> tuple[torch.Tensor, dict]:
         """
         Evaluate the log probability

@@ -3,6 +3,7 @@ import argparse
 import torch
 import time
 from datetime import timedelta
+import numpy as np
 
 from .documenter import Documenter
 from .train import Model, GenerativeUnfolding, Omnifold
@@ -55,7 +56,8 @@ def init_run(doc: Documenter, params: dict, verbose: bool) -> tuple[Model, Proce
     device = torch.device("cuda:0" if use_cuda else "cpu")
     print("------- Loading data -------")
     dataset = params.get("process", "ZJetsGenerative")
-    print(f"    Process: {dataset}")
+    loader = params["process_params"].get("loader", "theirs")
+    print(f"    Process: {dataset}, loader {loader}")
     process = eval(dataset)(params["process_params"], device)
     data = (
         process.get_data("train"),
@@ -141,8 +143,9 @@ def evaluation_generative(
         bayesian=model.model.bayesian,
         show_metrics=True
     )
-    print(f"    Plotting loss")
-    plots.plot_losses(doc.add_file("losses"+name+".pdf"))
+    if name == "":
+        print(f"    Plotting loss")
+        plots.plot_losses(doc.add_file("losses"+name+".pdf"))
     print(f"    Plotting observables")
     if params.get("save_hist_data", False):
         pickle_file = doc.add_file("observables"+name+".pkl")
@@ -150,19 +153,84 @@ def evaluation_generative(
         pickle_file = None
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
 
-    plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
-    #print(f"    Plotting calibration")
-    #plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
-    #print(f"   Plotting pulls")
-    #plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
-    #print(f"   Plotting single events")
-    #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
+    if params.get("plot_preprocessed", True):
+        print(f"    Plotting preprocessed data")
+        plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
+    print(f"    Plotting calibration")
+    plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
+    print(f"    Plotting pulls")
+    plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
+    print(f"    Plotting single events")
+    plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
     print(f"    Plotting migration")
     plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
-    plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"))
+    #plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"))
     if params.get("plot_gt_migration", True):
         plots.plot_migration(doc.add_file("gt_migration" + name + ".pdf"), gt_hard=True)
-        plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), gt_hard=True)
+        #plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), gt_hard=True)
+
+    if params.get("save_samples", False):
+        print(f"    Saving samples")
+        file = doc.add_file("samples" + name + ".pkl")
+        np.save(file, x_gen_single)
+
+
+def evaluate_comparison(
+    doc: Documenter,
+    params: dict,
+    model: Model,
+    process: Process,
+    model_name: str = "final",
+    name: str = "comparison"):
+
+    print(f"Checkpoint: {model_name},  Data: Comparison Set")
+    data_reco = torch.tensor(np.load('/Users/huetsch/Desktop/SBresults/SB_Pythia_reco.npy'))
+    data_hard = torch.tensor(np.load('/Users/huetsch/Desktop/SBresults/SB_Pythia_hard.npy'))
+    data_SB = torch.tensor(np.load('/Users/huetsch/Desktop/SBresults/SB_Pythia_unfold.npy'))
+
+    loader_kwargs = {"shuffle": False, "batch_size": 10*params["batch_size"], "drop_last": False}
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(model.hard_pp(data_hard).float(),
+                                       model.reco_pp(data_reco).float()),
+        **loader_kwargs,
+    )
+
+    model.load(model_name)
+
+    print(f"    Generating single samples")
+    t0 = time.time()
+    x_gen_single = model.predict(loader=loader)
+    t1 = time.time()
+    time_diff = timedelta(seconds=round(t1 - t0))
+    print(f"    Generation completed after {time_diff}")
+
+    print(f"    Generating distributions")
+    x_gen_dist = model.predict_distribution(loader=loader)
+
+    if params.get("compute_test_loss", False):
+        print(f"    Computing test loss")
+        test_ll = model.dataset_loss(loader=loader)["loss"]
+        print(f"    Result: {test_ll:.4f}")
+
+    print(f"    Computing observables")
+    observables = process.hard_observables()
+    plots = Plots(
+        observables=observables,
+        losses=model.losses,
+        x_hard=data_hard,
+        x_reco=data_reco,
+        x_gen_single=x_gen_single,
+        x_gen_dist=x_gen_dist,
+        x_compare=data_SB,
+        bayesian=model.model.bayesian,
+        show_metrics=True
+    )
+    print(f"    Plotting observables")
+    if params.get("save_hist_data", False):
+        pickle_file = doc.add_file("observables"+name+".pkl")
+    else:
+        pickle_file = None
+    plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
 
 
 def evaluation_omnifold(
@@ -241,3 +309,6 @@ def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
             evaluation(doc, params, model, process, model_name="best", data="train", name="_best_train")
     if evaluate_analysis:
         evaluation(doc, params, model, process, data="analysis", name="_analysis")
+
+    if params.get("evaluate_comparison", True):
+        evaluate_comparison(doc, params, model, process)

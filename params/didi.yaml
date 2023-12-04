@@ -1,4 +1,4 @@
-run_name: UniformNoise2_Vanilla_Bays
+run_name: Reverse_t_test_SDE_trainNoise1fixed_200_01
 run_folder: DiDi/paired
 
 method: GenerativeUnfolding
@@ -6,6 +6,7 @@ unpaired: False
 
 process: ZJetsGenerative
 process_params:
+  loader: theirs
   train_slice: [0., 0.6]
   val_slice: [0.6, 0.65]
   test_slice: [0.65, 1.0]
@@ -15,9 +16,18 @@ process_params:
 # Preprocessing
 joint_normalization: False
 hard_preprocessing:
+  # add uniform noise [-0.5, 0.5] to these channels
   uniform_noise_channels: [2]
+  erf_norm_channels: []
+  cubic_root_channels: [0, 1, 2, 3]
+  special_preproc: True
+  #log_channels: [0, 1, 2]
 reco_preprocessing:
   uniform_noise_channels: [2]
+  erf_norm_channels: []
+  cubic_root_channels: [0, 1, 2, 3]
+  special_preproc: True
+  #log_channels: [0, 1, 2]
 
 # Training
 lr: 1.e-3
@@ -26,15 +36,16 @@ batch_size_sample: 20000
 lr_scheduler: cosine_annealing
 weight_decay: 0.
 betas: [0.9, 0.99]
-epochs: 30
+epochs: 200
 
 # Architecture
 model: DirectDiffusion
-bayesian: True
+give_x1: False
+bayesian: False
 bayesian_samples: 20
 
 minimum_noise_scale: 0
-t_noise_scale: 0
+t_noise_scale: 0.1
 
 network_params:
   network_class: Subnet
@@ -60,12 +71,13 @@ network_params:
     layers_per_block: 4
     activation: SiLU
 
-
-ODE_params:
+solver: SDE
+solver_params:
   t_min: 0
   t_max: 1
   mixed_precision: False
-  method: dopri5
+  ode_method: dopri5
+  sde_method: euler
   atol: 1.e-5
   rtol: 1.e-5
   step_size: 1.e-2
@@ -73,3 +85,4 @@ ODE_params:
 
 evaluate_train: False
 evaluate_analysis: False
+evaluate_comparison: False

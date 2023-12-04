@@ -1,0 +1,68 @@
+# run name
+run_name: Test
+# run folder. will be created in GenerativeUnfolding/output
+run_folder: INN/affine
+
+# method to do unfolding. GenerativeUnfolding for all models for the moment
+method: GenerativeUnfolding
+# parameters to read in the dataset build the splits
+process_params:
+  train_slice: [0., 0.6]
+  val_slice: [0.6, 0.65]
+  test_slice: [0.65, 1.0]
+  training_file: "data/Pythia26_full.npz"
+  analysis_file: "data/Herwig_full.npz"
+
+# parameters for the preprocessing. Not important at the moment
+hard_preprocessing:
+  type:
+  unit_hypercube: False
+  args:
+    pt_conserved: True
+reco_preprocessing:
+  type:
+
+# parameters for the training
+# n epochs
+epochs: 30
+# starter LR
+lr: 1.e-3
+# max LR. Only important if scheduler is one_cycle
+max_lr: 3.e-4
+# batch size
+batch_size: 128
+# lr scheduler. Can be one_cycle, cos_annealing or None
+lr_scheduler: cosine_annealing
+# optimizer weight decay factor
+weight_decay: 0.
+# optimizer betas
+betas: [0.9, 0.999]
+
+
+# Architecture
+# model class
+model: INN
+# coupling type. Can be affine or rational_quadratic for INNs
+coupling_type: affine
+# permute soft or hard. True only works for coupling type affine
+permute_soft: True
+# number of spline bins. Only relevant if coupling type is rational quadratic
+num_bins: 6
+# latent space: Can be gaussian or uniform for INNs. Uniform only works for rational quadratic splines
+latent_space: gaussian
+# bounds of the uniform latent distribution. only relevant if latent distribution is uniform
+uniform_bounds: [0., 1.]
+# number of INN blocks
+n_blocks: 12
+# internal size of INN subnets dense layers
+internal_size: 16
+# number of layers per block in INN subnets
+layers_per_block: 5
+# dropout in INN subnets
+dropout: 0.0
+
+
+# run evaluation and plots also on train data set
+evaluate_train: False
+# run evaluation and plots also on analysis data set. if true, analysis_file has to be set in the process_params
+evaluate_analysis: False

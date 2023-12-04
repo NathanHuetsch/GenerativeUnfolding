@@ -672,13 +672,19 @@ class LinearTrajectory(nn.Module):
         else:
             noise = torch.randn_like(x_0, device=x_0.device, dtype=x_0.dtype)
             x_t = (1 - t) * x_0 + t * x_1 + t * (1-t) * self.t_noise_scale * noise
-            x_t_dot = x_1 - x_0 + (1-2*t) * noise
+            x_t_dot = x_1 - x_0 + (1-2*t) * noise * self.t_noise_scale
         if self.minimum_noise_scale == 0:
             return x_t, x_t_dot
         else:
             minimum_noise = torch.randn_like(x_0, device=x_0.device, dtype=x_0.dtype)
             x_t += self.minimum_noise_scale * minimum_noise
             return x_t, x_t_dot
+
+    def beta(self, t, beta_0=1.e-5, beta_1=1.e-4):
+        if t >= 0 and t < 1 / 2:
+            return beta_0 + 2 * (beta_1 - beta_0) * t
+        else:
+            return beta_1 - 2 * (beta_1 - beta_0) * (t - 1 / 2)
 
 
 class SDE_wrapper(torch.nn.Module):
@@ -691,15 +697,12 @@ class SDE_wrapper(torch.nn.Module):
         self.condition = condition
 
     def f(self, t, x_t):
-        t = 1-t
         t = self.model.t_embedding((t * torch.ones_like(x_t[:, [0]])))
         x_t = self.model.x_embedding(x_t)
         if self.condition is not None:
-            v = self.model.net(x_t, t, self.condition)
+            v = self.model.net(t, x_t, self.condition)
         else:
-            v = self.model.net(x_t, t)
-        #l =  (1./(t))*x_t
-        #return 2*v - l*x_t
+            v = self.model.net(t, x_t)
         return v
 
     #def g(self, t, x_t):
@@ -709,7 +712,9 @@ class SDE_wrapper(torch.nn.Module):
     #    return torch.zeros_like(x_t)
 
     def g(self, t, x_t):
-        return torch.sqrt(t * (1-t)) * torch.ones_like(x_t, device=x_t.device, dtype=x_t.dtype)
+
+        return torch.sqrt(t*(1-t)*1.e-1) * torch.ones_like(x_t, device=x_t.device, dtype=x_t.dtype)
+        #return torch.sqrt(self.beta(t, beta_0=1.e-2, beta_1=1.e-1)) * torch.ones_like(x_t, device=x_t.device, dtype=x_t.dtype)
 
     def beta(self, t, beta_0=1.e-5, beta_1=1.e-4):
         if t >= 0 and t < 1 / 2:

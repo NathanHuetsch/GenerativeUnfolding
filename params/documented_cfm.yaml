@@ -1,0 +1,91 @@
+run_name: 4l_76d_250e
+run_folder: CFM
+
+method: GenerativeUnfolding
+process_params:
+  train_slice: [0., 0.6]
+  val_slice: [0.6, 0.65]
+  test_slice: [0.65, 1.0]
+  training_file: "data/Pythia26_full.npz"
+  analysis_file: "data/Herwig_full.npz"
+
+# Preprocessing
+hard_preprocessing:
+  type:
+  unit_hypercube: False
+  args:
+    pt_conserved: True
+reco_preprocessing:
+  type:
+
+# Training
+lr: 1.e-3
+batch_size: 128
+batch_size_sample: 10000
+lr_scheduler: cosine_annealing
+weight_decay: 0.
+betas: [0.9, 0.99]
+epochs: 250
+
+# Architecture
+model: CFM
+# latent space. Can be gaussian, uniform or mixture. Mixture means some channels gaussian, some uniform
+latent_space: gaussian
+# uniform channels if latent space is mixture
+uniform_channels: [5]
+# bounds of the uniform distribution
+uniform_bounds: [0., 1.]
+# small amount of noise to add to the dataset. Sometimes this makes diffusion more stable. Could try 1.e-2/1.e-3/1.e-4
+minimum_noise_scale: 0
+# time-dependent noise to add to diffusion trajectory. Might help, could try 1, 1.e-1, 1.e-2, 1.e-3, 1.e-4
+t_noise_scale: 0
+
+network_params:
+  # which type of network. Currently only Subnet works, need to fix this
+  network_class: Subnet
+  # internal size of the layers
+  internal_size: 76
+  # number of layers
+  layers_per_block: 4
+  activation: SiLU
+
+  # embedding for the diffusion time. Could try this out
+  embed_t: False
+  embed_t_mode: gfprojection
+  # dimension to embed t to. Could be 8, 16, 32, ...
+  embed_t_dim: 16
+
+  # embedding network for the condition. Probably not needed here
+  embed_c: False
+  embed_c_dim: 32
+  embed_c_params:
+    internal_size: 64
+    layers_per_block: 4
+    activation: SiLU
+
+  # not needed here
+  embed_x: False
+  embed_x_dim: 32
+  embed_x_params:
+    internal_size: 64
+    layers_per_block: 4
+    activation: SiLU
+
+# Solver for the diffusion ODE
+solver: ODE
+solver_params:
+  # start time for the solver. Theoretically 0, sometimes small values 1.e-3/1.e-4 make the solution more stable. Could experiment with that
+  t_min: 0
+  # end time for the solver. Theoretically 1, sometimes 0.999, 0.9999  make the solution more stable. Could experiment with that
+  t_max: 1
+  mixed_precision: False
+  sde_method: srk
+  ode_method: dopri5
+  # precision with which to solve the ODE. Could experiment with values between 1.e-3 and 1.e-8 and how it affects speed vs precision
+  atol: 1.e-5
+  # precision with which to solve the ODE. Could experiment with values between 1.e-3 and 1.e-8 and how it affects speed vs precision
+  rtol: 1.e-5
+  step_size: 1.e-2
+
+evaluate_train: False
+evaluate_analysis: False

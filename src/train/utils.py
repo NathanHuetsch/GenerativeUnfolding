@@ -2,7 +2,7 @@ import numpy as np
 from scipy.stats import wasserstein_distance
 
 
-# taken from https://github.com/ViniciusMikuni/SBUnfold
+# adapted from https://github.com/ViniciusMikuni/SBUnfold
 def GetEMD(ref, array, weights_arr=None, nboot=100):
     if weights_arr is None:
         weights_arr = np.ones(len(ref))
@@ -17,7 +17,7 @@ def GetEMD(ref, array, weights_arr=None, nboot=100):
     return np.mean(ds), np.std(ds)
 
 
-# taken from https://github.com/ViniciusMikuni/SBUnfold
+# adapted from https://github.com/ViniciusMikuni/SBUnfold
 def get_triangle_distance(true, predicted, bins, weights=None, nboot=100):
     x, _ = np.histogram(true, bins=bins, density=True)
     ds = []

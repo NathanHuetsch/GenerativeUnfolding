@@ -39,6 +39,7 @@ class Plots:
         x_reco: torch.Tensor,
         x_gen_single: torch.Tensor,
         x_gen_dist: torch.Tensor,
+        x_compare=None,
         x_hard_pp=None,
         x_reco_pp=None,
         bayesian: bool = False,
@@ -59,6 +60,8 @@ class Plots:
         self.observables = observables
         self.losses = losses
 
+        self.compare = x_compare is not None
+
         self.x_hard_pp = x_hard_pp
         self.x_reco_pp = x_reco_pp
 
@@ -66,6 +69,7 @@ class Plots:
         self.obs_reco = []
         self.obs_gen_single = []
         self.obs_gen_dist = []
+        self.obs_compare = []
         self.bins = []
         for obs in observables:
             o_hard = obs.compute(x_hard)
@@ -81,6 +85,12 @@ class Plots:
             self.obs_gen_dist.append(o_gen_dist.cpu().numpy())
 
             self.bins.append(obs.bins(o_hard).cpu().numpy())
+
+            if self.compare:
+                o_compare = obs.compute(x_compare)
+            else:
+                o_compare = None
+            self.obs_compare.append(o_compare)
 
         self.bayesian = bayesian
         self.show_metrics = show_metrics
@@ -162,8 +172,8 @@ class Plots:
         """
         pickle_data = []
         with PdfPages(file) as pp:
-            for obs, bins, data_hard, data_reco, data_gen in zip(
-                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_single
+            for obs, bins, data_hard, data_reco, data_gen, data_compare in zip(
+                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_single, self.obs_compare
             ):
                 y_hard, y_hard_err = self.compute_hist_data(bins, data_hard, bayesian=False)
                 y_reco, y_reco_err = self.compute_hist_data(bins, data_reco, bayesian=False)
@@ -189,6 +199,17 @@ class Plots:
                         color=self.colors[1],
                     ),
                 ]
+                if self.compare:
+                    y_comp, y_comp_err = self.compute_hist_data(bins, data_compare, bayesian=False)
+                    lines.append(
+                        Line(
+                            y=y_comp,
+                            y_err=y_gen_err,
+                            y_ref=y_hard,
+                            label="Compare",
+                            color=self.colors[3]
+                        )
+                    )
                 self.hist_plot(pp, lines, bins, obs, show_metrics=self.show_metrics)
                 if pickle_file is not None:
                     pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
@@ -433,11 +454,11 @@ class Plots:
 
             if show_ratios:
                 axs[1].set_ylabel(r"$\frac{\mathrm{Model}}{\mathrm{Truth}}$")
-                axs[1].set_yticks([0.9, 1, 1.1])
-                axs[1].set_ylim([0.85, 1.15])
+                axs[1].set_yticks([0.95, 1, 1.05])
+                axs[1].set_ylim([0.9, 1.1])
                 axs[1].axhline(y=1, c="black", ls="--", lw=0.7)
-                axs[1].axhline(y=1.1, c="black", ls="dotted", lw=0.5)
-                axs[1].axhline(y=0.9, c="black", ls="dotted", lw=0.5)
+                axs[1].axhline(y=1.05, c="black", ls="dotted", lw=0.5)
+                axs[1].axhline(y=0.95, c="black", ls="dotted", lw=0.5)
 
             if show_metrics:
                 axs[-1].text(bins[0], 0.2, f"10*EMD: {observable.emd_mean} $\pm$ {observable.emd_std}"
@@ -614,17 +635,20 @@ class Plots:
                 emd_mean, emd_std = GetEMD(x_true, x_gen, nboot=10)
                 triangle_dist_mean, triangle_dist_std = get_triangle_distance(x_true, x_gen, bins, nboot=10)
             else:
-                emd = []
-                triangle_dist = []
-                for sample in x_gen:
-                    emd_sample, _ = GetEMD(x_true, sample, nboot=1)
-                    triangle_dist_sample, _ = get_triangle_distance(x_true, sample, bins, nboot=1)
-                    emd.append(emd_sample)
-                    triangle_dist.append(triangle_dist_sample)
-                emd_mean = emd[0]
-                triangle_dist_mean = triangle_dist[0]
-                emd_std = np.array(emd).std()
-                triangle_dist_std = np.array(triangle_dist).std()
+                emd_mean, emd_std = GetEMD(x_true, x_gen[0], nboot=10)
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(x_true, x_gen[0], bins, nboot=10)
+            #else:
+            #    emd = []
+            #    triangle_dist = []
+            #    for sample in x_gen:
+            #        emd_sample, _ = GetEMD(x_true, sample, nboot=1)
+            #        triangle_dist_sample, _ = get_triangle_distance(x_true, sample, bins, nboot=1)
+            #        emd.append(emd_sample)
+            #        triangle_dist.append(triangle_dist_sample)
+            #    emd_mean = emd[0]
+            #    triangle_dist_mean = triangle_dist[0]
+            #    emd_std = np.array(emd).std()
+            #    triangle_dist_std = np.array(triangle_dist).std()
             obs.emd_mean = round(emd_mean, 4)
             obs.emd_std = round(emd_std, 5)
             obs.triangle_mean = round(triangle_dist_mean, 4)
@@ -876,17 +900,21 @@ class OmnifoldPlots(Plots):
                 emd_mean, emd_std = GetEMD(data_hard_herwig, data_hard_pythia, nboot=10, weights_arr=weights)
                 triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_hard_herwig, data_hard_pythia, bins, nboot=10, weights=weights)
             else:
-                emd = []
-                triangle_dist = []
-                for weight_sample in weights:
-                    emd_sample, _ = GetEMD(data_hard_herwig, data_hard_pythia, nboot=1, weights_arr=weight_sample)
-                    triangle_dist_sample, _ = get_triangle_distance(data_hard_herwig, data_hard_pythia, bins, nboot=1, weights=weight_sample)
-                    emd.append(emd_sample)
-                    triangle_dist.append(triangle_dist_sample)
-                emd_mean = np.array(emd).mean()
-                emd_std = np.array(emd).std()
-                triangle_dist_mean = np.array(triangle_dist).mean()
-                triangle_dist_std = np.array(triangle_dist).std()
+                emd_mean, emd_std = GetEMD(data_hard_herwig, data_hard_pythia, nboot=10, weights_arr=weights[0])
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_hard_herwig, data_hard_pythia, bins,
+                                                                              nboot=10, weights=weights[0])
+            #else:
+            #    emd = []
+            #    triangle_dist = []
+            #    for weight_sample in weights:
+            #        emd_sample, _ = GetEMD(data_hard_herwig, data_hard_pythia, nboot=1, weights_arr=weight_sample)
+            #        triangle_dist_sample, _ = get_triangle_distance(data_hard_herwig, data_hard_pythia, bins, nboot=1, weights=weight_sample)
+            #        emd.append(emd_sample)
+            #        triangle_dist.append(triangle_dist_sample)
+            #    emd_mean = np.array(emd).mean()
+            #    emd_std = np.array(emd).std()
+            #    triangle_dist_mean = np.array(triangle_dist).mean()
+            #    triangle_dist_std = np.array(triangle_dist).std()
 
             obs.emd_mean = round(emd_mean, 4)
             obs.emd_std = round(emd_std, 5)

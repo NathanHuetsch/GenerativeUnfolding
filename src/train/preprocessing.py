@@ -33,6 +33,7 @@ class PreprocTrafo(nn.Module):
         rev: bool = False,
         batch_size: int = 100000,
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
+        batch_size = len(x)
         if rev and not self.invertible:
             raise ValueError("Tried to call inverse of non-invertible transformation")
         input_shape, output_shape = (
@@ -150,10 +151,10 @@ class UniformNoisePreprocessing(PreprocTrafo):
 
     def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
         if rev:
-            z = x
+            z = x.clone()
             z[:, self.channels] = torch.round(z[:, self.channels])
         else:
-            z = x
+            z = x.clone()
             noise = torch.rand_like(z[:, self.channels])-0.5
             z[:, self.channels] = z[:, self.channels] + noise
         return z
@@ -187,10 +188,10 @@ class CubicRootPreproc(PreprocTrafo):
 
     def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
         if rev:
-            z = x
+            z = x.clone()
             z[:, self.channels] = z[:, self.channels] ** 3
         else:
-            z = x
+            z = x.clone()
             z[:, self.channels] = np.cbrt(z[:, self.channels])# ** (1./3.)
         return z
 
@@ -205,12 +206,12 @@ class LogPreproc(PreprocTrafo):
 
     def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
         if rev:
-            z = x
+            z = x.clone()
             z[:, self.channels] = z[:, self.channels].exp()
             if 3 in self.channels:
                 z[:, 3] = -1 * z[:, 3]
         else:
-            z = x
+            z = x.clone()
             if 3 in self.channels:
                 z[:, 3] = -1 * z[:, 3]
             z[:, self.channels] = (z[:, self.channels]).log()
@@ -226,9 +227,8 @@ class SpecialPreproc(PreprocTrafo):
 
     def transform(self, x: torch.Tensor, rev: bool) -> torch.Tensor:
         if rev:
-            z = x
+            z = x.clone()
             z4 = z[:, 4]
-            #z4 = z4*self.std2 + self.mean2
             z4 = torch.erf(z4)
             z4 = z4*self.factor
             z4 = z4+self.shift
@@ -236,7 +236,7 @@ class SpecialPreproc(PreprocTrafo):
             z4 = torch.where(z4 < 0.1, 0, z4)
             z[:, 4] = z4
         else:
-            z = x
+            z = x.clone()
             z4 = z[:, 4]
             noise = (torch.rand(size=z4.shape)/1000. * 3 + 0.097).to(z.device)
             z4 = torch.where(z4 < 0.1, noise, z4)

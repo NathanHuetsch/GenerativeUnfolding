@@ -430,10 +430,6 @@ class GenerativeUnfolding(Model):
             self.reco_pp.init_normalization(data[0].x_reco)
         self.input_data_preprocessed = tuple(self.hard_pp(subset.x_hard) for subset in data)
         self.cond_data_preprocessed = tuple(self.reco_pp(subset.x_reco) for subset in data)
-        #print([self.input_data_preprocessed[0][:, i].mean() for i in range(6)])
-        #print([self.input_data_preprocessed[0][:, i].std() for i in range(6)])
-        #print([self.input_data_preprocessed[0][:, i].min() for i in range(6)])
-        #print([self.input_data_preprocessed[0][:, i].max() for i in range(6)])
         super(GenerativeUnfolding, self).init_data_loaders(self.input_data_preprocessed, self.cond_data_preprocessed)
 
     def begin_epoch(self):

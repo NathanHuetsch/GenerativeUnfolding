@@ -1,0 +1,40 @@
+run_name: fixedLayers_beta10
+run_folder: FFF
+
+method: GenerativeUnfolding
+process: ZJetsGenerative
+process_params:
+  train_slice: [0., 0.6]
+  val_slice: [0.6, 0.65]
+  test_slice: [0.65, 1.0]
+  training_file: "data/Pythia26_full.npz"
+  analysis_file: "data/Herwig_full.npz"
+
+# Preprocessing
+hard_preprocessing:
+  type:
+  args:
+    pt_conserved: True
+reco_preprocessing:
+  type:
+
+# Training
+lr: 1.e-4
+max_lr: 1.e-3
+batch_size: 128
+batch_size_sample: 20000
+lr_scheduler: one_cycle
+weight_decay: 0.
+betas: [0.9, 0.99]
+epochs: 200
+beta: 10
+
+# Architecture
+model: FreeFormFlow
+
+network_params:
+  internal_size: 80
+  layers_per_block: 8
+  activation: ReLU
+
+evaluate_train: False

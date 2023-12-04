@@ -197,9 +197,9 @@ class CFM(nn.Module):
                 net_wrapper = SDE_wrapper(self, c)
 
             # Sample from the latent distribution
-            x_1 = self.latent_dist.sample((batch_size, )).to(device, dtype=dtype)
+            x_0 = self.latent_dist.sample((batch_size, )).to(device, dtype=dtype)
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
-            x_t = self.solver(net_wrapper, x_1, reverse=True)
+            x_t = self.solver(net_wrapper, x_0, reverse=False)
         return x_t[-1]
 
     def batch_loss(
@@ -217,7 +217,7 @@ class CFM(nn.Module):
             loss_terms: dictionary with loss contributions
         """
         # Sample a target for the diffusion trajectory
-        x_1 = self.latent_dist.sample((x.size(0), )).to(x.device, dtype=x.dtype)
+        x_0 = self.latent_dist.sample((x.size(0), )).to(x.device, dtype=x.dtype)
 
         # Sample a time step
         if self.mod_t:
@@ -227,7 +227,7 @@ class CFM(nn.Module):
             t = torch.rand((x.size(0), 1), dtype=x.dtype, device=x.device)
 
         # Calculate x_t, x_t_dot along the trajectory
-        x_t, x_t_dot = self.trajectory(x, x_1, t)
+        x_t, x_t_dot = self.trajectory(x_0, x, t)
         # Predict the velocity
         t = self.t_embedding(t)
         c = self.c_embedding(c)

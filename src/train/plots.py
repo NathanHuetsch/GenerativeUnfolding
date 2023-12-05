@@ -333,8 +333,8 @@ class Plots:
                     self.observables, self.x_hard_pp.T, self.x_reco_pp.T
             ):
                 bins = 100
-                y_hard, bins = np.histogram(data_hard_pp, bins=bins, density=True)
-                y_reco, _ = np.histogram(data_reco_pp, bins=bins, density=True)
+                y_hard, bins = np.histogram(data_hard_pp.cpu().numpy(), bins=bins, density=True)
+                y_reco, _ = np.histogram(data_reco_pp.cpu().numpy(), bins=bins, density=True)
                 #y_gen, y_gen_err = self.compute_hist_data(bins, data_gen, bayesian=self.bayesian)
                 normal = np.random.normal(size=data_hard_pp.shape)
                 y_normal, _ = np.histogram(normal, bins=bins, density=True)
@@ -409,7 +409,7 @@ class Plots:
 
             for line in lines:
                 if line.vline:
-                    axs[0].axvline(line.y, label=line.label, color=line.color)
+                    axs[0].axvline(line.y, label=line.label, color=line.color, linestyle=line.linestyle)
                     continue
                 integral = np.sum((bins[1:] - bins[:-1]) * line.y)
                 scale = 1 / integral if integral != 0.0 else 1.0

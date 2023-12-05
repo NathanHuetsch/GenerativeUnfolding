@@ -154,6 +154,7 @@ def evaluation_generative(
         pickle_file = None
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
 
+
     if params.get("plot_metrics", False):
         print(f"    Plotting metrics")
         if params.get("save_metrics_data", True):
@@ -321,5 +322,5 @@ def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
     if evaluate_analysis:
         evaluation(doc, params, model, process, data="analysis", name="_analysis")
 
-    if params.get("evaluate_comparison", True):
+    if params.get("evaluate_comparison", False):
         evaluate_comparison(doc, params, model, process)

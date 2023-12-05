@@ -43,7 +43,8 @@ class Plots:
         x_hard_pp=None,
         x_reco_pp=None,
         bayesian: bool = False,
-        show_metrics: bool = True
+        show_metrics: bool = True,
+        plot_metrics: bool = False
     ):
         """
         Initializes the plotting pipeline with the data to be plotted.
@@ -94,6 +95,8 @@ class Plots:
 
         self.bayesian = bayesian
         self.show_metrics = show_metrics
+        self.colors = [f"C{i}" for i in range(10)]
+        self.plot_metrics = plot_metrics
         if self.show_metrics:
             print(f"    Computing metrics")
             self.compute_metrics()
@@ -102,7 +105,6 @@ class Plots:
         plt.rc("axes", titlesize="medium")
         plt.rc("text.latex", preamble=r"\usepackage{amsmath}")
         plt.rc("text", usetex=True)
-        self.colors = [f"C{i}" for i in range(10)]
 
     def plot_losses(self, file: str):
         """
@@ -635,24 +637,149 @@ class Plots:
                 emd_mean, emd_std = GetEMD(x_true, x_gen, nboot=10)
                 triangle_dist_mean, triangle_dist_std = get_triangle_distance(x_true, x_gen, bins, nboot=10)
             else:
-                emd_mean, emd_std = GetEMD(x_true, x_gen[0], nboot=10)
-                triangle_dist_mean, triangle_dist_std = get_triangle_distance(x_true, x_gen[0], bins, nboot=10)
-            #else:
-            #    emd = []
-            #    triangle_dist = []
-            #    for sample in x_gen:
-            #        emd_sample, _ = GetEMD(x_true, sample, nboot=1)
-            #        triangle_dist_sample, _ = get_triangle_distance(x_true, sample, bins, nboot=1)
-            #        emd.append(emd_sample)
-            #        triangle_dist.append(triangle_dist_sample)
-            #    emd_mean = emd[0]
-            #    triangle_dist_mean = triangle_dist[0]
-            #    emd_std = np.array(emd).std()
-            #    triangle_dist_std = np.array(triangle_dist).std()
-            obs.emd_mean = round(emd_mean, 4)
-            obs.emd_std = round(emd_std, 5)
-            obs.triangle_mean = round(triangle_dist_mean, 4)
-            obs.triangle_std = round(triangle_dist_std, 5)
+                if not self.plot_metrics:
+                    emd_mean, emd_std = GetEMD(x_true, x_gen[0], nboot=10) # Get the MAP
+                    triangle_dist_mean, triangle_dist_std = get_triangle_distance(x_true, x_gen[0], bins, nboot=10)
+                #else:
+                #    emd = []
+                #    triangle_dist = []
+                #    for sample in x_gen:
+                #        emd_sample, _ = GetEMD(x_true, sample, nboot=1)
+                #        triangle_dist_sample, _ = get_triangle_distance(x_true, sample, bins, nboot=1)
+                #        emd.append(emd_sample)
+                #        triangle_dist.append(triangle_dist_sample)
+                #    emd_mean = emd[0]
+                #    triangle_dist_mean = triangle_dist[0]
+                #    emd_std = np.array(emd).std()
+                #    triangle_dist_std = np.array(triangle_dist).std()
+                    obs.emd_mean = round(emd_mean, 4)
+                    obs.emd_std = round(emd_std, 5)
+                    obs.triangle_mean = round(triangle_dist_mean, 4)
+                    obs.triangle_std = round(triangle_dist_std, 5)
+                else:
+                    emd_arr = np.zeros(len(x_gen))
+                    triangle_dist_arr = np.zeros(len(x_gen))
+
+                    for k in range(len(x_gen)):
+                        emd_arr[k] = GetEMD(x_true, x_gen[k], nboot=0)
+                        triangle_dist_arr[k] = get_triangle_distance(x_true, x_gen[k], bins, nboot=0)
+                    obs.emd_arr = emd_arr
+                    obs.triangle_arr = triangle_dist_arr
+                    obs.emd_mean = round(obs.emd_arr[0], 4)
+                    obs.emd_std = round(obs.emd_arr.std(), 5)
+                    obs.triangle_mean = round(obs.triangle_arr[0], 4)
+                    obs.triangle_std = round(obs.triangle_arr.std(), 5)
+
+    def hist_metrics(self, file: str, pickle_file: Optional[str] = None):
+        pickle_data = {'emd': [], 'triangle': []}
+
+        with PdfPages(file) as pp:
+            for obs in self.observables:
+                nbins = 64
+                emd_bins = np.linspace(0, 1.5 * max(obs.emd_arr), nbins)
+                triangle_bins = np.linspace(0, 1.5 * max(obs.triangle_arr), nbins)
+                emd_hist, _ = np.histogram(obs.emd_arr, bins=emd_bins, density=False)
+                triangle_hist, _ = np.histogram(obs.triangle_arr, bins=triangle_bins, density=False)
+
+                emd_lines = [
+                    Line(
+                        y=emd_hist,
+                        y_err=None,
+                        label="EMD",
+                        color=self.colors[2],
+                    ),
+                    Line(
+                        y=obs.emd_arr[0],
+                        vline=True,
+                        y_err=None,
+                        label="EMD MAP",
+                        color=self.colors[2],
+                        linestyle='dashed',
+                    )
+                ]
+                triangle_lines = [
+                    Line(
+                        y=triangle_hist,
+                        y_err=None,
+                        label="Triangle",
+                        color=self.colors[3],
+                    ),
+                    Line(
+                        y=obs.triangle_arr[0],
+                        vline=True,
+                        y_err=None,
+                        label="Triangle MAP",
+                        color=self.colors[3],
+                        linestyle='dashed',
+                    )
+                ]
+                self.hist_plot(pp, emd_lines, emd_bins, obs, show_metrics=False, show_ratios=False, no_scale=True, yscale='log')
+                self.hist_plot(pp, triangle_lines, triangle_bins, obs, show_metrics=False, show_ratios=False, no_scale=True, yscale='log')
+
+                if pickle_file is not None:
+                    pickle_data["emd"].append(obs.emd_arr)
+                    pickle_data["triangle"].append(obs.triangle_arr)
+        if pickle_file is not None:
+            with open(pickle_file, "wb") as f:
+                pickle.dump(pickle_data, f)
+
+    def plot_multiple_bayesian(self, file: str):
+        """
+        Makes histograms of truth and generated distributions for all observables.
+        Args:
+            file: Output file name
+        """
+        with PdfPages(file) as pp:
+            for obs, bins, data_hard, data_reco, data_gen, data_compare in zip(
+                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_single, self.obs_compare
+            ):
+                y_hard, y_hard_err = self.compute_hist_data(bins, data_hard, bayesian=False)
+                y_reco, y_reco_err = self.compute_hist_data(bins, data_reco, bayesian=False)
+                y_gen, y_gen_err = self.compute_hist_data(bins, data_gen, bayesian=self.bayesian)
+                lines = [
+                    Line(
+                        y=y_hard,
+                        y_err=None,
+                        label="Hard",
+                        color=self.colors[0],
+                    ),
+                    Line(
+                        y=y_gen,
+                        y_err=None,
+                        y_ref=y_hard,
+                        label="MAP",
+                        color=self.colors[1],
+                    ),
+                ]
+                obs_emds = obs.emd_arr
+                emd_argsort = np.argsort(obs_emds)
+
+                for i in range(2):
+                    index = emd_argsort[i]
+                    d = data_gen[index]
+                    y, _ = self.compute_hist_data(bins, d, bayesian=False)
+                    lines.append(
+                        Line(
+                            y=y,
+                            y_err=None,
+                            y_ref=y_hard,
+                            label=f"{i}-th best, {index}",
+                            color=self.colors[4+i]
+                        )
+                    )
+                    index = emd_argsort[-(i+1)]
+                    d = data_gen[index]
+                    y, _ = self.compute_hist_data(bins, d, bayesian=False)
+                    lines.append(
+                        Line(
+                            y=y,
+                            y_err=None,
+                            y_ref=y_hard,
+                            label=f"{i}-th worst, {index}",
+                            color=self.colors[7 + i]
+                        )
+                    )
+                self.hist_plot(pp, lines, bins, obs, show_metrics=False)
 
 
 class OmnifoldPlots(Plots):

@@ -449,7 +449,7 @@ class Plots:
                     )
 
             axs[0].legend(frameon=False)
-            axs[0].set_ylabel("Entries")
+            axs[0].set_ylabel("normalized")
             axs[0].set_yscale(observable.yscale if yscale is None else yscale)
             if title is not None:
                 self.corner_text(axs[0], title, "left", "top")
@@ -713,8 +713,8 @@ class Plots:
                         linestyle='dashed',
                     )
                 ]
-                self.hist_plot(pp, emd_lines, emd_bins, obs, show_metrics=False, show_ratios=False, no_scale=True, yscale='log')
-                self.hist_plot(pp, triangle_lines, triangle_bins, obs, show_metrics=False, show_ratios=False, no_scale=True, yscale='log')
+                self.hist_plot(pp, emd_lines, emd_bins, obs, show_metrics=False, show_ratios=False, yscale='linear')
+                self.hist_plot(pp, triangle_lines, triangle_bins, obs, show_metrics=False, show_ratios=False, yscale='linear')
 
                 if pickle_file is not None:
                     pickle_data["emd"].append(obs.emd_arr)
@@ -780,56 +780,6 @@ class Plots:
                         )
                     )
                 self.hist_plot(pp, lines, bins, obs, show_metrics=False)
-
-        with PdfPages(file) as pp:
-            for obs in self.observables:
-                nbins = 64
-                emd_bins = np.linspace(0, 1.5 * max(obs.emd_arr), nbins)
-                triangle_bins = np.linspace(0, 1.5 * max(obs.triangle_arr), nbins)
-                emd_hist, _ = np.histogram(obs.emd_arr, bins=emd_bins, density=False)
-                triangle_hist, _ = np.histogram(obs.triangle_arr, bins=triangle_bins, density=False)
-
-                emd_lines = [
-                    Line(
-                        y=emd_hist,
-                        y_err=None,
-                        label="EMD",
-                        color=self.colors[2],
-                    ),
-                    Line(
-                        y=obs.emd_arr[0],
-                        vline=True,
-                        y_err=None,
-                        label="EMD MAP",
-                        color=self.colors[2],
-                        linestyle='dashed',
-                    )
-                ]
-                triangle_lines = [
-                    Line(
-                        y=triangle_hist,
-                        y_err=None,
-                        label="Triangle",
-                        color=self.colors[3],
-                    ),
-                    Line(
-                        y=obs.triangle_arr[0],
-                        vline=True,
-                        y_err=None,
-                        label="Triangle MAP",
-                        color=self.colors[3],
-                        linestyle='dashed',
-                    )
-                ]
-                self.hist_plot(pp, emd_lines, emd_bins, obs, show_metrics=False, show_ratios=False, no_scale=True, yscale='log')
-                self.hist_plot(pp, triangle_lines, triangle_bins, obs, show_metrics=False, show_ratios=False, no_scale=True, yscale='log')
-
-                if pickle_file is not None:
-                    pickle_data["emd"].append(obs.emd_arr)
-                    pickle_data["triangle"].append(obs.triangle_arr)
-        if pickle_file is not None:
-            with open(pickle_file, "wb") as f:
-                pickle.dump(pickle_data, f)
 
 class OmnifoldPlots(Plots):
     def __init__(

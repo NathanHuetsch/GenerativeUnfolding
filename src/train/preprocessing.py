@@ -238,7 +238,7 @@ class SpecialPreproc(PreprocTrafo):
         else:
             z = x.clone()
             z4 = z[:, 4]
-            noise = torch.rand(size=z4.shape)/1000. * 3 + 0.097
+            noise = torch.rand(size=z4.shape, device=x.device)/1000. * 3 + 0.097
             z4 = torch.where(z4 < 0.1, noise, z4)
             z4 = z4.log()
             self.shift = (z4.max() + z4.min())/2.

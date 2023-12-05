@@ -142,7 +142,7 @@ def evaluation_generative(
         x_reco_pp=data_reco_pp,
         bayesian=model.model.bayesian,
         show_metrics=True,
-        plot_metrics=True
+        plot_metrics=params.get("plot_metrics", False)
     )
     if name == "":
         print(f"    Plotting loss")
@@ -154,14 +154,16 @@ def evaluation_generative(
         pickle_file = None
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
 
-   
-    
-    if params.get("save_metrics_data", True):
+
+    if params.get("plot_metrics", False):
+        print(f"    Plotting metrics")
+        if params.get("save_metrics_data", True):
             pickle_file = doc.add_file("metrics"+name+".pkl")
         else:
             pickle_file = None
-        print(f"    Plotting metrics")
         plots.hist_metrics(doc.add_file("metrics"+name+".pdf"), pickle_file)
+        plots.plot_multiple_bayesian(doc.add_file("bayesian_samples"+name+".pdf"))
+
     if params.get("plot_preprocessed", True) and name == "":
         print(f"    Plotting preprocessed data")
         plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))

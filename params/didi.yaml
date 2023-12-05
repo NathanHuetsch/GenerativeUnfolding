@@ -1,8 +1,8 @@
-run_name: Reverse_t_test_SDE_trainNoise1fixed_200_01
-run_folder: DiDi/paired
+run_name: BetaNoiseSchedule
+run_folder: DiDi/unpaired
 
 method: GenerativeUnfolding
-unpaired: False
+unpaired: True
 
 process: ZJetsGenerative
 process_params:
@@ -36,7 +36,7 @@ batch_size_sample: 20000
 lr_scheduler: cosine_annealing
 weight_decay: 0.
 betas: [0.9, 0.99]
-epochs: 200
+epochs: 30
 
 # Architecture
 model: DirectDiffusion
@@ -45,7 +45,7 @@ bayesian: False
 bayesian_samples: 20
 
 minimum_noise_scale: 0
-t_noise_scale: 0.1
+t_noise_scale: beta
 
 network_params:
   network_class: Subnet
@@ -71,7 +71,7 @@ network_params:
     layers_per_block: 4
     activation: SiLU
 
-solver: SDE
+solver: ODE
 solver_params:
   t_min: 0
   t_max: 1
@@ -85,4 +85,4 @@ solver_params:
 
 evaluate_train: False
 evaluate_analysis: False
-evaluate_comparison: False
+evaluate_comparison: True

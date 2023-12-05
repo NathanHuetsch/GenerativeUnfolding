@@ -1,4 +1,4 @@
-run_name: trash
+run_name: clusterTuster_hugeTest
 run_folder: INN/rqs
 
 method: GenerativeUnfolding
@@ -28,13 +28,13 @@ reco_preprocessing:
   special_preproc: True
 
 # Training
-lr: 1.e-3
+lr: 1.e-4
 max_lr: 3.e-4
-batch_size: 128
-lr_scheduler: cosine_annealing
+batch_size: 512
+lr_scheduler: one_cycle
 weight_decay: 0.
 betas: [0.9, 0.999]
-epochs: 0
+epochs: 200
 
 # Architecture
 model: INN
@@ -44,15 +44,16 @@ bayesian_samples: 20
 latent_space: gaussian
 uniform_bounds: [0., 1.]
 
-n_blocks: 10
-internal_size: 16
-layers_per_block: 3
+n_blocks: 20
+internal_size: 128
+layers_per_block: 5
 coupling_type: rational_quadratic
 permutations: soft
 permute_soft: True
-num_bins: 6
+num_bins: 10
 dropout: 0.0
 
+dist_samples_per_event: 30
 evaluate_train: False
 evaluate_analysis: False
 evaluate_comparison: True

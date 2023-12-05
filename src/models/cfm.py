@@ -47,6 +47,8 @@ class CFM(nn.Module):
 
         self.loss_fct = nn.MSELoss()
 
+        self.use_ema_sample = self.params.get("use_ema_sample", True)
+
     def build_net(self):
         """
         Construct the Network
@@ -168,7 +170,6 @@ class CFM(nn.Module):
             self.solver = ODEsolver(params=self.params.get("solver_params", {}))
         else:
             self.solver = SDEsolver(params=self.params.get("solver_params", {}))
-            #self.SDE = SDE(self)
 
     def sample(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -183,6 +184,15 @@ class CFM(nn.Module):
         dtype = c.dtype
         device = c.device
 
+        try:
+            if self.use_ema_sample:
+                net = self.ema
+            else:
+                net = self.net
+        except:
+            print("Loading Ema failed")
+            net=self.net
+
         with torch.no_grad():
             c = self.c_embedding(c)
 
@@ -191,7 +201,7 @@ class CFM(nn.Module):
                 def net_wrapper(t, x_t):
                     x_t = self.x_embedding(x_t)
                     t = self.t_embedding(t * torch.ones_like(x_t[:, [0]], dtype=dtype, device=device))
-                    v = self.net(t, x_t, c)
+                    v = net(t, x_t, c)
                     return v
             else:
                 net_wrapper = SDE_wrapper(self, c)

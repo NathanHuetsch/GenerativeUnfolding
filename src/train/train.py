@@ -490,6 +490,7 @@ class GenerativeUnfolding(Model):
             tensor with samples, shape (n_events, dims_in)
         """
         samples = super().predict(loader)
+        #samples = self.input_data_preprocessed[2] # use this to check that predicted = just the true data recovered inverting the preproc
         samples_pp = self.hard_pp(
             samples.reshape(-1, samples.shape[-1]), rev=True, batch_size=1000
         )

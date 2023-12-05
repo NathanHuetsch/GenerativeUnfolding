@@ -208,7 +208,7 @@ class Plots:
                             y=y_comp,
                             y_err=y_gen_err,
                             y_ref=y_hard,
-                            label="Compare",
+                            label="SB",
                             color=self.colors[3]
                         )
                     )

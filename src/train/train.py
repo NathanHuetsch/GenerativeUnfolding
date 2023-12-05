@@ -5,6 +5,7 @@ import time
 from datetime import timedelta
 import os
 import torch
+from ema_pytorch import EMA
 from ..models.inn import INN
 from ..models.transfermer import Transfermer
 from ..models.cfm import CFM, CFMwithTransformer
@@ -156,6 +157,16 @@ class Model:
             )
         else:
             self.scheduler = None
+
+        self.use_ema = self.params.get("use_ema", False)
+        if self.use_ema:
+            self.model.use_ema = True
+            n_epochs = self.params.get("n_epochs", 100)
+            trainloader_length = len(self.train_loader)
+            ema_start = self.params.get("ema_start", 0.8)
+            ema_start_iter = int(ema_start * n_epochs * trainloader_length)
+            self.model.ema = EMA(self.model.net, update_after_step=ema_start_iter, update_every=10).to(self.device)
+            print(f"    Using EMA with start at {ema_start}")
 
     def begin_epoch(self):
         """
@@ -314,8 +325,9 @@ class Model:
             loader = self.test_loader
         self.model.eval()
         bayesian_samples = self.params.get("bayesian_samples", 20) if self.model.bayesian else 1
+        bayesian_samples = 2
         max_batches = min(len(loader), self.params.get("max_dist_batches", 2))
-        samples_per_event = self.params.get("dist_samples_per_event", 2)
+        samples_per_event = self.params.get("dist_samples_per_event", 50)
         with torch.no_grad():
             all_samples = []
             for j in range(bayesian_samples):
@@ -368,6 +380,9 @@ class Model:
             },
             file,
         )
+        if self.use_ema:
+            file = os.path.join(self.model_path, f"ema_{name}.pth")
+            torch.save(self.model.ema.state_dict(), file)
 
     def load(self, name: str):
         """
@@ -384,6 +399,14 @@ class Model:
             except AttributeError:
                 pass
         self.losses = state_dicts["losses"]
+
+        if self.params.get("use_ema", False):
+            self.use_ema = True
+            self.model.use_ema = True
+            file = os.path.join(self.model_path, f"ema_{name}.pth")
+            ema_dict = torch.load(file, map_location=self.device)
+            self.model.ema = EMA(self.model.net).to(self.device)
+            self.model.ema.load_state_dict(ema_dict)
 
 
 class GenerativeUnfolding(Model):

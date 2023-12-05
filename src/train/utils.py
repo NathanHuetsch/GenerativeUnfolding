@@ -7,6 +7,7 @@ def GetEMD(ref, array, weights_arr=None, nboot=100):
     if weights_arr is None:
         weights_arr = np.ones(len(ref))
     ds = []
+
     if nboot > 0:
         for _ in range(nboot):
             # ref_boot = np.random.choice(ref,ref.shape[0])
@@ -25,6 +26,7 @@ def GetEMD(ref, array, weights_arr=None, nboot=100):
 def get_triangle_distance(true, predicted, bins, weights=None, nboot=100):
     x, _ = np.histogram(true, bins=bins, density=True)
     ds = []
+
     if nboot > 0:
         for _ in range(nboot):
             arr_idx = np.random.choice(range(predicted.shape[0]), predicted.shape[0])

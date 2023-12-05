@@ -142,8 +142,9 @@ class Subnet(nn.Module):
         if isinstance(activation, str):
             activation = getattr(nn, activation)
 
-        bayesian = params.get("bayesian")
-        if bayesian:
+        bayesian = params.get("bayesian", False)
+        bayesian_mode = params.get("bayesian_mode", "all")
+        if bayesian and bayesian_mode == "all":
             layer_class = VBLinear
             layer_args = {"prior_prec": params.get("prior_prec", 1.0),
                           "std_init": params.get("std_init", -9)}
@@ -158,7 +159,10 @@ class Subnet(nn.Module):
                 input_dim = embed_t_dim + embed_x_dim + embed_c_dim
             if n == num_layers - 1:
                 output_dim = params["dims_in"]
-
+                if bayesian and bayesian_mode == "last":
+                    layer_class = VBLinear
+                    layer_args = {"prior_prec": params.get("prior_prec", 1.0),
+                                  "std_init": params.get("std_init", -9)}
             self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
 
             if n < num_layers - 1:
@@ -669,6 +673,10 @@ class LinearTrajectory(nn.Module):
         if self.t_noise_scale == 0:
             x_t = (1-t) * x_0 + t * x_1
             x_t_dot = x_1 - x_0
+        elif self.t_noise_scale == "beta":
+            noise = torch.randn_like(x_0, device=x_0.device, dtype=x_0.dtype)
+            x_t = (1 - t) * x_0 + t * x_1 + self.beta(t)*noise
+            x_t_dot = x_1 - x_0 + self.beta_dot(t)*noise
         else:
             noise = torch.randn_like(x_0, device=x_0.device, dtype=x_0.dtype)
             x_t = (1 - t) * x_0 + t * x_1 + t * (1-t) * self.t_noise_scale * noise
@@ -681,10 +689,10 @@ class LinearTrajectory(nn.Module):
             return x_t, x_t_dot
 
     def beta(self, t, beta_0=1.e-5, beta_1=1.e-4):
-        if t >= 0 and t < 1 / 2:
-            return beta_0 + 2 * (beta_1 - beta_0) * t
-        else:
-            return beta_1 - 2 * (beta_1 - beta_0) * (t - 1 / 2)
+        return torch.where(t < 1./2., beta_0 + 2 * (beta_1 - beta_0) * t, beta_1 - 2 * (beta_1 - beta_0) * (t - 1 / 2))
+
+    def beta_dot(self, t, beta_0=1.e-5, beta_1=1.e-4):
+        return torch.where(t < 1. / 2., 2 * (beta_1 - beta_0), - 2 * (beta_1 - beta_0))
 
 
 class SDE_wrapper(torch.nn.Module):
@@ -705,16 +713,10 @@ class SDE_wrapper(torch.nn.Module):
             v = self.model.net(t, x_t)
         return v
 
-    #def g(self, t, x_t):
-    #    t = 1-t
-    #    coeff = 2*t/(1-t)
-    #    #return torch.ones_like(x_t)*torch.sqrt(coeff)
-    #    return torch.zeros_like(x_t)
-
     def g(self, t, x_t):
 
-        return torch.sqrt(t*(1-t)*1.e-1) * torch.ones_like(x_t, device=x_t.device, dtype=x_t.dtype)
-        #return torch.sqrt(self.beta(t, beta_0=1.e-2, beta_1=1.e-1)) * torch.ones_like(x_t, device=x_t.device, dtype=x_t.dtype)
+        return torch.sqrt(t*(1-t)*0.1) * torch.ones_like(x_t, device=x_t.device, dtype=x_t.dtype)
+        #return torch.sqrt(self.beta(t)) * torch.ones_like(x_t, device=x_t.device, dtype=x_t.dtype)
 
     def beta(self, t, beta_0=1.e-5, beta_1=1.e-4):
         if t >= 0 and t < 1 / 2:

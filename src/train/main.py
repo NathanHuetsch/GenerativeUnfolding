@@ -153,27 +153,28 @@ def evaluation_generative(
     else:
         pickle_file = None
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
+
+   
     
     if params.get("save_metrics_data", True):
-        pickle_file = doc.add_file("metrics"+name+".pkl")
-    else:
-        pickle_file = None
-    print(f"    Plotting metrics")
-    plots.hist_metrics(doc.add_file("metrics"+name+".pdf"), pickle_file)
-
-    #if params.get("plot_preprocessed", True):
-        #print(f"    Plotting preprocessed data")
-        #plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
-    #print(f"    Plotting calibration")
-    #plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
+            pickle_file = doc.add_file("metrics"+name+".pkl")
+        else:
+            pickle_file = None
+        print(f"    Plotting metrics")
+        plots.hist_metrics(doc.add_file("metrics"+name+".pdf"), pickle_file)
+    if params.get("plot_preprocessed", True) and name == "":
+        print(f"    Plotting preprocessed data")
+        plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
+    print(f"    Plotting calibration")
+    plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
     #print(f"    Plotting pulls")
     #plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
-   #print(f"    Plotting single events")
-    #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
-    #print(f"    Plotting migration")
-    #plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
+    print(f"    Plotting single events")
+    plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
+    print(f"    Plotting migration")
+    plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
     #plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"))
-    if params.get("plot_gt_migration", True):
+    if params.get("plot_gt_migration", True) and name == "":
         plots.plot_migration(doc.add_file("gt_migration" + name + ".pdf"), gt_hard=True)
         #plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), gt_hard=True)
 
@@ -189,7 +190,7 @@ def evaluate_comparison(
     model: Model,
     process: Process,
     model_name: str = "final",
-    name: str = "comparison"):
+    name: str = ""):
 
     print(f"Checkpoint: {model_name},  Data: Comparison Set")
     data_reco = torch.tensor(np.load('data/SB_Pythia_reco.npy'))
@@ -235,10 +236,10 @@ def evaluate_comparison(
     )
     print(f"    Plotting observables")
     if params.get("save_hist_data", False):
-        pickle_file = doc.add_file("observables"+name+".pkl")
+        pickle_file = doc.add_file("observables_comparison"+name+".pkl")
     else:
         pickle_file = None
-    plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
+    plots.plot_observables(doc.add_file("observables_comparison"+name+".pdf"), pickle_file)
 
 
 def evaluation_omnifold(
@@ -283,8 +284,9 @@ def evaluation_omnifold(
         bayesian=model.model.bayesian,
         show_metrics=True
     )
-    print(f"    Plotting loss")
-    plots.plot_losses(doc.add_file("losses"+name+".pdf"))
+    if name == "":
+        print(f"    Plotting loss")
+        plots.plot_losses(doc.add_file("losses.pdf"))
     print(f"    Plotting classes")
     plots.plot_classes(doc.add_file("classification"+name+".pdf"))
     print(f"    Plotting reco")

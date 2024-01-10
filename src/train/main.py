@@ -167,14 +167,14 @@ def evaluation_generative(
     if params.get("plot_preprocessed", True) and name == "":
         print(f"    Plotting preprocessed data")
         plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
-    print(f"    Plotting calibration")
-    plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
+    #print(f"    Plotting calibration")
+    #plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
     #print(f"    Plotting pulls")
     #plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
-    print(f"    Plotting single events")
-    plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
-    print(f"    Plotting migration")
-    plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
+    #print(f"    Plotting single events")
+    #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
+    #print(f"    Plotting migration")
+    #plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
     #plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"))
     if params.get("plot_gt_migration", True) and name == "":
         plots.plot_migration(doc.add_file("gt_migration" + name + ".pdf"), gt_hard=True)
@@ -195,9 +195,9 @@ def evaluate_comparison(
     name: str = ""):
 
     print(f"Checkpoint: {model_name},  Data: Comparison Set")
-    data_reco = torch.tensor(np.load('data/SB_Pythia_reco.npy'))
-    data_hard = torch.tensor(np.load('data/SB_Pythia_hard.npy'))
-    data_SB = torch.tensor(np.load('data/SB_Pythia_unfold.npy'))
+    data_reco = torch.tensor(np.load('data/SB_Pythia_reco.npy')).to(model.device)
+    data_hard = torch.tensor(np.load('data/SB_Pythia_hard.npy')).to(model.device)
+    data_SB = torch.tensor(np.load('data/SB_Pythia_unfold.npy')).to(model.device)
 
     loader_kwargs = {"shuffle": False, "batch_size": 10*params["batch_size"], "drop_last": False}
     loader = torch.utils.data.DataLoader(

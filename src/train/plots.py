@@ -88,7 +88,7 @@ class Plots:
             self.bins.append(obs.bins(o_hard).cpu().numpy())
 
             if self.compare:
-                o_compare = obs.compute(x_compare)
+                o_compare = (obs.compute(x_compare)).cpu().numpy()
             else:
                 o_compare = None
             self.obs_compare.append(o_compare)
@@ -636,10 +636,18 @@ class Plots:
             if not self.bayesian:
                 emd_mean, emd_std = GetEMD(x_true, x_gen, nboot=10)
                 triangle_dist_mean, triangle_dist_std = get_triangle_distance(x_true, x_gen, bins, nboot=10)
+                obs.emd_mean = round(emd_mean, 4)
+                obs.emd_std = round(emd_std, 5)
+                obs.triangle_mean = round(triangle_dist_mean, 4)
+                obs.triangle_std = round(triangle_dist_std, 5)
             else:
                 if not self.plot_metrics:
                     emd_mean, emd_std = GetEMD(x_true, x_gen[0], nboot=10) # Get the MAP
                     triangle_dist_mean, triangle_dist_std = get_triangle_distance(x_true, x_gen[0], bins, nboot=10)
+                    obs.emd_mean = round(emd_mean, 4)
+                    obs.emd_std = round(emd_std, 5)
+                    obs.triangle_mean = round(triangle_dist_mean, 4)
+                    obs.triangle_std = round(triangle_dist_std, 5)
                 #else:
                 #    emd = []
                 #    triangle_dist = []
@@ -652,10 +660,7 @@ class Plots:
                 #    triangle_dist_mean = triangle_dist[0]
                 #    emd_std = np.array(emd).std()
                 #    triangle_dist_std = np.array(triangle_dist).std()
-                    obs.emd_mean = round(emd_mean, 4)
-                    obs.emd_std = round(emd_std, 5)
-                    obs.triangle_mean = round(triangle_dist_mean, 4)
-                    obs.triangle_std = round(triangle_dist_std, 5)
+                    
                 else:
                     emd_arr = np.zeros(len(x_gen))
                     triangle_dist_arr = np.zeros(len(x_gen))

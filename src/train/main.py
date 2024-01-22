@@ -153,37 +153,38 @@ def evaluation_generative(
     else:
         pickle_file = None
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
-
+    #plots.plot_observables_full(doc.add_file("observables_full" + name + ".pdf"), pickle_file)
 
     if params.get("plot_metrics", False):
-        print(f"    Plotting metrics")
-        if params.get("save_metrics_data", True):
-            pickle_file = doc.add_file("metrics"+name+".pkl")
-        else:
-            pickle_file = None
-        plots.hist_metrics(doc.add_file("metrics"+name+".pdf"), pickle_file)
-        plots.plot_multiple_bayesian(doc.add_file("bayesian_samples"+name+".pdf"))
+        plots.hist_metrics_unfoldings(doc.add_file("unfolding_metrics"+name+".pdf"), pickle_file)
+        plots.plot_multiple_unfoldings(doc.add_file("unfolding_samples"+name+".pdf"))
 
-    if params.get("plot_preprocessed", True) and name == "":
-        print(f"    Plotting preprocessed data")
-        plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
-    print(f"    Plotting calibration")
-    plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
+        if model.model.bayesian:
+            plots.hist_metrics_bayesian(doc.add_file("bayesian_metrics" + name + ".pdf"), pickle_file)
+            plots.plot_multiple_bayesians(doc.add_file("bayesian_samples" + name + ".pdf"))
+
+    #if params.get("plot_preprocessed", True) and name == "":
+    #    print(f"    Plotting preprocessed data")
+    #    plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
+    #print(f"    Plotting calibration")
+    #plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
     #print(f"    Plotting pulls")
     #plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
-    print(f"    Plotting single events")
-    plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
-    print(f"    Plotting migration")
-    plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
-    #plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"))
-    if params.get("plot_gt_migration", True) and name == "":
-        plots.plot_migration(doc.add_file("gt_migration" + name + ".pdf"), gt_hard=True)
-        #plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), gt_hard=True)
+    #print(f"    Plotting single events")
+    #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
+    #print(f"    Plotting migration")
+    #plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
+    plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"))
+    plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), gt_hard=True)
+    #if params.get("plot_gt_migration", True) and name == "":
+        #plots.plot_migration(doc.add_file("gt_migration" + name + ".pdf"), gt_hard=True)
 
     if params.get("save_samples", False):
         print(f"    Saving samples")
         file = doc.add_file("samples" + name + ".pkl")
         np.save(file, x_gen_single)
+
+    plots.save_metrics(doc.add_file("metrics" + name + ".pkl"))
 
 
 def evaluate_comparison(
@@ -195,9 +196,9 @@ def evaluate_comparison(
     name: str = ""):
 
     print(f"Checkpoint: {model_name},  Data: Comparison Set")
-    data_reco = torch.tensor(np.load('data/SB_Pythia_reco.npy'))
-    data_hard = torch.tensor(np.load('data/SB_Pythia_hard.npy'))
-    data_SB = torch.tensor(np.load('data/SB_Pythia_unfold.npy'))
+    data_reco = torch.tensor(np.load('data/SB_Pythia_reco.npy')).to(model.device)
+    data_hard = torch.tensor(np.load('data/SB_Pythia_hard.npy')).to(model.device)
+    data_SB = torch.tensor(np.load('data/SB_Pythia_unfold.npy')).to(model.device)
 
     loader_kwargs = {"shuffle": False, "batch_size": 10*params["batch_size"], "drop_last": False}
     loader = torch.utils.data.DataLoader(
@@ -257,7 +258,15 @@ def evaluation_omnifold(
     if data == "test":
         loader = model.test_loader
     elif data == "train":
-        loader = model.train_loader
+        train_data = process.get_data("train")
+        label_data = train_data.label
+        reco_data = model.reco_pp(train_data.x_reco)
+        loader_kwargs = {"shuffle": False, "batch_size": 10 * params["batch_size"], "drop_last": False}
+        loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(label_data.float(),
+                                           reco_data.float()),
+            **loader_kwargs,
+        )
 
     model.load(model_name)
 
@@ -269,7 +278,7 @@ def evaluation_omnifold(
     print(f"    Predictions completed after {time_diff}")
 
     if params.get("compute_test_loss", False):
-        print(f"    Computing test loss")
+        print(f"    Computing {data} loss")
         test_ll = model.dataset_loss(loader=loader)["loss"]
         print(f"    Result: {test_ll:.4f}")
 

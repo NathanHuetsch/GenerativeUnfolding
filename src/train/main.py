@@ -244,6 +244,9 @@ def evaluate_comparison(
         pickle_file = None
     plots.plot_observables(doc.add_file("observables_comparison"+name+".pdf"), pickle_file)
 
+    plots.plot_migration2(doc.add_file("SB_migration2" + name + ".pdf"), SB_hard=True)
+
+
 
 def evaluation_omnifold(
     doc: Documenter,

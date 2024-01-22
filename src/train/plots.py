@@ -628,30 +628,43 @@ class Plots:
                 plt.savefig(pp, format="pdf", bbox_inches="tight")
                 plt.close()
 
-    def plot_migration2(self, file: str, gt_hard=False):
+    def plot_migration2(self, file: str, gt_hard=False, SB_hard=False):
         if gt_hard:
             obs_hard = self.obs_hard
             name_hard = "Hard"
+        elif SB_hard:
+            obs_hard = self.obs_compare
+            name_hard = "SB"
         else:
             obs_hard = self.obs_gen_single
             name_hard = "Unfold"
         cmap = plt.get_cmap('viridis')
         cmap.set_bad("white")
+
+        ranges = [
+            [0, 0.4],
+            [0, 0.3],
+            [0, 0.5],
+            [0, 0.5],
+            [0, 0.2],
+            [0, 0.25]
+        ]
+
         with PdfPages(file) as pp:
-            for obs, bins, data_reco, data_hard in zip(
-                self.observables, self.bins, self.obs_reco, obs_hard
+            for obs, bins, data_reco, data_hard, r in zip(
+                self.observables, self.bins, self.obs_reco, obs_hard, ranges
                     ):
                 cmap = plt.get_cmap('viridis')
                 cmap.set_bad("white")
-                if self.bayesian and not gt_hard:
-                    h, x, y = np.histogram2d(data_hard[0][0], data_reco, bins=(bins, bins))
-                elif not gt_hard:
-                    h, x, y = np.histogram2d(data_hard[0], data_reco, bins=(bins, bins))
-                else:
+                if gt_hard or SB_hard:
                     h, x, y = np.histogram2d(data_hard, data_reco, bins=(bins, bins))
+                elif self.bayesian:
+                    h, x, y = np.histogram2d(data_hard[0][0], data_reco, bins=(bins, bins))
+                else:
+                    h, x, y = np.histogram2d(data_hard[0], data_reco, bins=(bins, bins))
                 h = np.ma.divide(h, np.sum(h, -1, keepdims=True)).filled(0)
                 h[h == 0] = np.nan
-                plt.pcolormesh(bins, bins, h, cmap=cmap, rasterized=True, vmin=0, vmax=0.5)
+                plt.pcolormesh(bins, bins, h, cmap=cmap, rasterized=True, vmin=r[0], vmax=r[1])
                 plt.colorbar()
 
                 unit = "" if obs.unit is None else f" [{obs.unit}]"

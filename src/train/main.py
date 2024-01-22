@@ -148,12 +148,12 @@ def evaluation_generative(
         print(f"    Plotting loss")
         plots.plot_losses(doc.add_file("losses"+name+".pdf"))
     print(f"    Plotting observables")
-    if params.get("save_hist_data", False):
+    if params.get("save_hist_data", True):
         pickle_file = doc.add_file("observables"+name+".pkl")
     else:
         pickle_file = None
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
-    #plots.plot_observables_full(doc.add_file("observables_full" + name + ".pdf"), pickle_file)
+    plots.plot_observables_full(doc.add_file("observables_full" + name + ".pdf"), None)
 
     if params.get("plot_metrics", False):
         plots.hist_metrics_unfoldings(doc.add_file("unfolding_metrics"+name+".pdf"), pickle_file)
@@ -238,12 +238,11 @@ def evaluate_comparison(
         show_metrics=True
     )
     print(f"    Plotting observables")
-    if params.get("save_hist_data", False):
+    if params.get("save_hist_data", True):
         pickle_file = doc.add_file("observables_comparison"+name+".pkl")
     else:
         pickle_file = None
     plots.plot_observables(doc.add_file("observables_comparison"+name+".pdf"), pickle_file)
-
     plots.plot_migration2(doc.add_file("SB_migration2" + name + ".pdf"), SB_hard=True)
 
 

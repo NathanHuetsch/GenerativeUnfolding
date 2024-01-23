@@ -9,6 +9,10 @@ def GetEMD(ref, array, weights_arr=None, nboot=100):
     ds = []
 
     if nboot > 0:
+        #print(np.where(np.isnan(ref))) # print indices of NaNs
+        #print(ref[np.where(np.isnan(ref))])
+        #print(np.where(np.isnan(array))) # print indices of NaNs
+        #import sys; sys.exit()
         for _ in range(nboot):
             # ref_boot = np.random.choice(ref,ref.shape[0])
             arr_idx = np.random.choice(range(array.shape[0]), array.shape[0])

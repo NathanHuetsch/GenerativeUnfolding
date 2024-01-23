@@ -52,9 +52,7 @@ def nanify(p: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
     )
 
 def round(p: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
-    return torch.where(
-        p[...,0] != 0., torch.round(obs), torch.tensor(float("nan"), device=p.device, dtype=p.dtype)
-    )
+    return torch.round(obs)
 
 def return_obs(p: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
     return obs
@@ -85,7 +83,7 @@ def momenta_to_observables(
     observables = []
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 0]),
+            compute=lambda p: return_obs(p[..., :], p[..., 0]),
             tex_label=r"\text{Jet mass } m",
             unit="GeV",
             bins=lambda obs: get_hardcoded_bins(
@@ -96,7 +94,7 @@ def momenta_to_observables(
     )
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 1]),
+            compute=lambda p: return_obs(p[..., :], p[..., 1]),
             tex_label=r"\text{Jet width } w",
             bins=lambda obs: get_hardcoded_bins(
                 obs, n_bins=n_bins, lower=0., upper=0.6
@@ -116,7 +114,7 @@ def momenta_to_observables(
     )
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 3]),
+            compute=lambda p: return_obs(p[..., :], p[..., 3]),
             tex_label=r"\text{Groomed mass }\log \rho",
             unit="GeV",
             bins=lambda obs: get_hardcoded_bins(
@@ -127,7 +125,7 @@ def momenta_to_observables(
     )
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 4]),
+            compute=lambda p: return_obs(p[..., :], p[..., 4]),
             tex_label=r"\text{Groomed momentum fraction }z_g",
             bins=lambda obs: get_hardcoded_bins(
                 obs, n_bins=n_bins, lower=-0.05, upper=0.55
@@ -137,7 +135,7 @@ def momenta_to_observables(
     )
     observables.append(
         Observable(
-            compute=lambda p: nanify(p[..., :], p[..., 5]),
+            compute=lambda p: return_obs(p[..., :], p[..., 5]),
             tex_label=r"\text{N-subjettiness ratio } \tau_{21}",
             bins=lambda obs: get_hardcoded_bins(
                 obs, n_bins=n_bins, lower=0.1, upper=1.1

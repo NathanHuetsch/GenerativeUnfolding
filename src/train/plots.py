@@ -117,7 +117,7 @@ class Plots:
             self.plot_single_loss(
                 pp,
                 "loss",
-                (self.losses["train_loss"], self.losses["val_loss"]),
+                (self.losses["tr_loss"], self.losses["val_loss"]),
                 ("train", "val"),
             )
             if self.bayesian:
@@ -382,7 +382,8 @@ class Plots:
         title: Optional[str] = None,
         no_scale: bool = False,
         yscale: Optional[str] = None,
-        show_metrics: bool = False
+        show_metrics: bool = False,
+        obs_or_reco_or_hard="obs"
     ):
         """
         Makes a single histogram plot, used for the observable histograms and clustering
@@ -463,9 +464,19 @@ class Plots:
                 axs[1].axhline(y=0.95, c="black", ls="dotted", lw=0.5)
 
             if show_metrics:
-                axs[-1].text(bins[0], 0.2, f"10*EMD: {observable.emd_mean} $\pm$ {observable.emd_std}"
-                                           f"    ;    1e3*TriDist: {observable.triangle_mean} $\pm$ "
-                                           f"{observable.triangle_std}", fontsize=13)
+                if obs_or_reco_or_hard=="obs":
+                    axs[-1].text(bins[0], 0.2, f"10*EMD: {observable.emd_mean} $\pm$ {observable.emd_std}"
+                                            f"    ;    1e3*TriDist: {observable.triangle_mean} $\pm$ "
+                                            f"{observable.triangle_std}", fontsize=13)
+                elif obs_or_reco_or_hard=="reco":
+                    axs[-1].text(bins[0], 0.2, f"10*EMD: {observable.reco_emd_mean} $\pm$ {observable.reco_emd_std}"
+                                            f"    ;    1e3*TriDist: {observable.reco_triangle_mean} $\pm$ "
+                                            f"{observable.reco_triangle_std}", fontsize=13)
+                else:
+                    axs[-1].text(bins[0], 0.2, f"10*EMD: {observable.hard_emd_mean} $\pm$ {observable.hard_emd_std}"
+                                            f"    ;    1e3*TriDist: {observable.hard_triangle_mean} $\pm$ "
+                                            f"{observable.hard_triangle_std}", fontsize=13)
+
                 axs[-1].set_yticks([])
             unit = "" if observable.unit is None else f" [{observable.unit}]"
             axs[-1].set_xlabel(f"${{{observable.tex_label}}}${unit}")
@@ -813,7 +824,7 @@ class OmnifoldPlots(Plots):
         self.losses = losses
         self.labels = labels.cpu().bool().numpy()
         self.predictions = predictions.cpu().numpy()
-        self.weights = np.clip((1. - self.predictions)/self.predictions, 0, 10).squeeze()
+        self.weights = np.clip((1. - self.predictions)/self.predictions, 0., 10).squeeze()
 
         self.obs_hard = []
         self.obs_reco = []
@@ -828,14 +839,104 @@ class OmnifoldPlots(Plots):
         self.bayesian = bayesian
         self.show_metrics = show_metrics
         if self.show_metrics:
-            print(f"    Computing metrics")
+            print(f"    Computing metrics for observables")
             self.compute_metrics()
+            print(f"    Computing metrics for reco datasets")
+            self.compute_metrics_reco()
+            print(f"    Computing metrics for hard datasets")
+            self.compute_metrics_hard()
 
         plt.rc("font", family="serif", size=16)
         plt.rc("axes", titlesize="medium")
         plt.rc("text.latex", preamble=r"\usepackage{amsmath}")
         plt.rc("text", usetex=True)
         self.colors = [f"C{i}" for i in range(10)]
+
+    def hist_weights_plot(
+        self,
+        pdf: PdfPages,
+        lines: list[Line],
+        bins: np.ndarray,
+        show_ratios: bool = False,
+        title: Optional[str] = None,
+        no_scale: bool = False,
+        yscale: Optional[str] = None,
+        show_metrics: bool = False,
+    ):
+        """
+        Makes a single histogram plot for the weights
+        Args:
+            pdf: Multipage PDF object
+            lines: List of line objects describing the histograms
+            bins: Numpy array with the bin boundaries
+            show_ratios: If True, show a panel with ratios
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+
+            n_panels = 1 + int(show_ratios) + int(show_metrics)
+            fig, axs = plt.subplots(
+                n_panels,
+                1,
+                sharex=True,
+                figsize=(6, 4.5),
+                gridspec_kw={"height_ratios": (12, 3, 1)[:n_panels], "hspace": 0.00},
+            )
+            if n_panels == 1:
+                axs = [axs]
+
+            for line in lines:
+                if line.vline:
+                    axs[0].axvline(line.y, label=line.label, color=line.color, linestyle=line.linestyle)
+                    continue
+                integral = np.sum((bins[1:] - bins[:-1]) * line.y)
+                scale = 1 / integral if integral != 0.0 else 1.0
+                if line.y_ref is not None:
+                    ref_integral = np.sum((bins[1:] - bins[:-1]) * line.y_ref)
+                    ref_scale = 1 / ref_integral if ref_integral != 0.0 else 1.0
+                if no_scale:
+                    scale = 1.
+                    ref_scale = 1.
+
+                self.hist_line(
+                    axs[0],
+                    bins,
+                    line.y * scale,
+                    line.y_err * scale if line.y_err is not None else None,
+                    label=line.label,
+                    color=line.color,
+                    fill=line.fill,
+                    linestyle=line.linestyle
+                )
+
+                if line.y_ref is not None:
+                    ratio = (line.y * scale) / (line.y_ref * ref_scale)
+                    ratio_isnan = np.isnan(ratio)
+                    if line.y_err is not None:
+                        if len(line.y_err.shape) == 2:
+                            ratio_err = (line.y_err * scale) / (line.y_ref * ref_scale)
+                            ratio_err[:, ratio_isnan] = 0.0
+                        else:
+                            ratio_err = np.sqrt((line.y_err / line.y) ** 2)
+                            ratio_err[ratio_isnan] = 0.0
+                    else:
+                        ratio_err = None
+                    ratio[ratio_isnan] = 1.0
+                    self.hist_line(
+                        axs[1], bins, ratio, ratio_err, label=None, color=line.color
+                    )
+
+            axs[0].legend(frameon=False)
+            axs[0].set_ylabel("normalized")
+            axs[0].set_yscale("log" if yscale is None else yscale)
+            if title is not None:
+                self.corner_text(axs[0], title, "left", "top")
+
+            axs[-1].set_xlabel(f"$w(x)$")
+            axs[-1].set_xscale("log")
+            axs[-1].set_xlim(bins[0], bins[-1])
+            plt.savefig(pdf, format="pdf", bbox_inches="tight")
+            plt.close()
 
     def compute_hist_data(self, bins: np.ndarray, data: np.ndarray, bayesian=False, weights=None):
         if bayesian:
@@ -889,6 +990,40 @@ class OmnifoldPlots(Plots):
                     ))
                 self.hist_plot(pp, lines, bins, obs, no_scale=True, yscale="linear")
 
+    def plot_weights(self, file: str):
+        """
+        Makes plots of the weights learned for Pythia vs Herwig.
+        Args:
+            file: Output file name
+        """
+        with PdfPages(file) as pp:
+            if self.bayesian:
+                weights_pythia = self.weights[0][self.labels.squeeze()]
+                weights_herwig = self.weights[0][~self.labels.squeeze()]
+            else:
+                weights_pythia = self.weights[self.labels.squeeze()]
+                weights_herwig = self.weights[~self.labels.squeeze()]
+            bins = np.logspace(-1.5, 1.5, 128)
+            y_pythia, y_pythia_err = self.compute_hist_data(bins, weights_pythia, bayesian=False)
+            y_herwig, y_herwig_err = self.compute_hist_data(bins, weights_herwig, bayesian=False)
+
+
+            lines = [
+                        Line(
+                            y=y_pythia,
+                            y_err=None,
+                            label="Pythia",
+                            color=self.colors[2],
+                        ),
+                        Line(
+                            y=y_herwig,
+                            y_err=None,
+                            label="Herwig",
+                            color=self.colors[0],
+                        ),
+                    ]
+            self.hist_weights_plot(pp, lines, bins, show_ratios=False)
+
     def plot_reco(self, file: str):
         """
         Makes plots of truth and predicted classes for all observables.
@@ -928,7 +1063,7 @@ class OmnifoldPlots(Plots):
                         color=self.colors[1],
                     ),
                 ]
-                self.hist_plot(pp, lines, bins, obs, show_metrics=False)
+                self.hist_plot(pp, lines, bins, obs, show_metrics=self.show_metrics, obs_or_reco_or_hard="reco")
 
     def plot_hard(self, file: str):
         """
@@ -969,7 +1104,7 @@ class OmnifoldPlots(Plots):
                         color=self.colors[1],
                     ),
                 ]
-                self.hist_plot(pp, lines, bins, obs, show_metrics=False)
+                self.hist_plot(pp, lines, bins, obs, show_metrics=self.show_metrics, obs_or_reco_or_hard="hard")
 
     def plot_observables(self, file: str, pickle_file: Optional[str] = None):
         """
@@ -1011,7 +1146,7 @@ class OmnifoldPlots(Plots):
                         color=self.colors[1],
                     ),
                 ]
-                self.hist_plot(pp, lines, bins, obs, show_metrics=self.show_metrics)
+                self.hist_plot(pp, lines, bins, obs, show_metrics=self.show_metrics, obs_or_reco_or_hard="obs")
                 if pickle_file is not None:
                     pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
 
@@ -1051,3 +1186,43 @@ class OmnifoldPlots(Plots):
             obs.emd_std = round(emd_std, 5)
             obs.triangle_mean = round(triangle_dist_mean, 4)
             obs.triangle_std = round(triangle_dist_std, 5)
+
+    def compute_metrics_reco(self):
+        for obs, bins, data in zip(self.observables, self.bins, self.obs_reco):
+
+            data_herwig = data[~self.labels.squeeze()]
+            data_pythia = data[self.labels.squeeze()]
+            weights = self.weights[..., self.labels.squeeze()]
+
+            if not self.bayesian:
+                emd_mean, emd_std = GetEMD(data_herwig, data_pythia, nboot=10, weights_arr=weights)
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_herwig, data_pythia, bins, nboot=10, weights=weights)
+            else:
+                emd_mean, emd_std = GetEMD(data_herwig, data_pythia, nboot=10, weights_arr=weights[0])
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_herwig, data_pythia, bins,
+                                                                                nboot=10, weights=weights[0])
+
+            obs.reco_emd_mean = round(emd_mean, 4)
+            obs.reco_emd_std = round(emd_std, 5)
+            obs.reco_triangle_mean = round(triangle_dist_mean, 4)
+            obs.reco_triangle_std = round(triangle_dist_std, 5)
+
+    def compute_metrics_hard(self):
+        for obs, bins, data in zip(self.observables, self.bins, self.obs_hard):
+
+            data_herwig = data[~self.labels.squeeze()]
+            data_pythia = data[self.labels.squeeze()]
+            weights = self.weights[..., self.labels.squeeze()]
+
+            if not self.bayesian:
+                emd_mean, emd_std = GetEMD(data_herwig, data_pythia, nboot=10, weights_arr=weights)
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_herwig, data_pythia, bins, nboot=10, weights=weights)
+            else:
+                emd_mean, emd_std = GetEMD(data_herwig, data_pythia, nboot=10, weights_arr=weights[0])
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_herwig, data_pythia, bins,
+                                                                                nboot=10, weights=weights[0])
+
+            obs.hard_emd_mean = round(emd_mean, 4)
+            obs.hard_emd_std = round(emd_std, 5)
+            obs.hard_triangle_mean = round(triangle_dist_mean, 4)
+            obs.hard_triangle_std = round(triangle_dist_std, 5)

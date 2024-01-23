@@ -258,6 +258,14 @@ def evaluation_omnifold(
         loader = model.test_loader
     elif data == "train":
         loader = model.train_loader
+        train_data = process.get_data("train")
+        label_data = train_data.label
+        reco_data = model.reco_pp(train_data.x_reco)
+        loader_kwargs = {"shuffle": False, "batch_size": 10 * params["batch_size"], "drop_last": False}
+        loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(label_data.float(),
+                                                                            reco_data.float()),
+                                                                            **loader_kwargs,
+                                                                            )
 
     model.load(model_name)
 
@@ -291,6 +299,8 @@ def evaluation_omnifold(
         plots.plot_losses(doc.add_file("losses.pdf"))
     print(f"    Plotting classes")
     plots.plot_classes(doc.add_file("classification"+name+".pdf"))
+    print(f"    Plotting weights")
+    plots.plot_weights(doc.add_file("weights"+name+".pdf"))
     print(f"    Plotting reco")
     plots.plot_reco(doc.add_file("reco"+name+".pdf"))
     print(f"    Plotting hard")

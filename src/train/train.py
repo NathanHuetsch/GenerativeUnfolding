@@ -317,7 +317,7 @@ class Model:
                 if self.model.bayesian:
                     print(f"    Finished bayesian sample {i} in {time.time() - t0}", flush=True)
             all_samples = torch.stack(all_samples, dim=0)
-            print(all_samples.shape)
+            print("Samples shape:", all_samples.shape)
             if self.model.bayesian:
                 return all_samples#.reshape(bayesian_samples, -1, 6)
             else:

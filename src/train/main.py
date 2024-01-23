@@ -163,7 +163,7 @@ def evaluation_generative(
             plots.hist_metrics_bayesian(doc.add_file("bayesian_metrics" + name + ".pdf"), pickle_file)
             plots.plot_multiple_bayesians(doc.add_file("bayesian_samples" + name + ".pdf"))
 
-    if params.get("plot_preprocessed", True) and name == "":
+    if params.get("plot_preprocessed", False) and name == "":
         print(f"    Plotting preprocessed data")
         plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
     #print(f"    Plotting calibration")

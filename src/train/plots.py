@@ -1061,6 +1061,93 @@ class Plots:
                         )
                     )
                 self.hist_plot(pp, lines, bins, obs, show_metrics=False)
+    def plot_observables_full(self, file: str, pickle_file: Optional[str] = None):
+        """
+        Makes histograms of truth and generated distributions for all observables.
+        Args:
+            file: Output file name
+        """
+        pickle_data = []
+        with PdfPages(file) as pp:
+            for obs, bins, data_hard, data_reco, data_gen, data_compare in zip(
+                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_single, self.obs_compare
+            ):
+                if self.bayesian:
+                    bay_n, dist_n, data_n = data_gen.shape
+                    data = data_gen.reshape(bay_n, -1)
+                else:
+                    dist_n, data_n = data_gen.shape
+                    data = data_gen.reshape(-1)
+
+
+                y_hard, y_hard_err = self.compute_hist_data(bins, data_hard, bayesian=False)
+                y_reco, y_reco_err = self.compute_hist_data(bins, data_reco, bayesian=False)
+                y_gen, y_gen_err = self.compute_hist_data(bins, data, bayesian=self.bayesian)
+                lines = [
+                    Line(
+                        y=y_reco,
+                        y_err=y_reco_err,
+                        label="Reco",
+                        color=self.colors[2],
+                    ),
+                    Line(
+                        y=y_hard,
+                        y_err=y_hard_err,
+                        label="Hard",
+                        color=self.colors[0],
+                    ),
+                    Line(
+                        y=y_gen,
+                        y_err=y_gen_err,
+                        y_ref=y_hard,
+                        label=f"MAP {dist_n} Unf. full",
+                        color=self.colors[1],
+                    ),
+
+                ]
+                if self.bayesian:
+                    y_gen_full, _ = self.compute_hist_data(bins, data.reshape(-1), bayesian=False)
+                    lines.append(Line(
+                        y=y_gen_full,
+                        y_err=None,
+                        y_ref=y_hard,
+                        label=f"{bay_n} bay., {dist_n} Unf.",
+                        color=self.colors[3],
+                    ))
+                if self.compare:
+                    y_comp, y_comp_err = self.compute_hist_data(bins, data_compare, bayesian=False)
+                    lines.append(
+                        Line(
+                            y=y_comp,
+                            y_err=y_gen_err,
+                            y_ref=y_hard,
+                            label="SB",
+                            color=self.colors[3]
+                        )
+                    )
+                if not self.bayesian:
+                    metrics = [obs.metrics["emd_full"][0],
+                               obs.metrics["emd_full_std"][0],
+                               obs.metrics["triangle_full"][0],
+                               obs.metrics["triangle_full_std"][0]]
+                else:
+                    metrics = [obs.metrics["emd_full_full"],
+                               obs.metrics["emd_full_full_std"],
+                               obs.metrics["triangle_full_full"],
+                               obs.metrics["triangle_full_full_std"]]
+                self.hist_plot(pp, lines, bins, obs, metrics=metrics)
+                if pickle_file is not None:
+                    pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
+
+        if pickle_file is not None:
+            with open(pickle_file, "wb") as f:
+                pickle.dump(pickle_data, f)
+
+    def save_metrics(self, pickle_file):
+
+        with open(pickle_file, "wb") as f:
+            pickle.dump(self.observables, f)
+
 
 
 class OmnifoldPlots(Plots):

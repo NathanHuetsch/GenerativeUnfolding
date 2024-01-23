@@ -1,12 +1,13 @@
-run_name: bOmnifold_03datasplit_100e_256dim
+run_name: one_tenth_dataset-300epochs-loader_theirs
 run_folder: Omnifold
 
 method: Omnifold
 
 process: ZJetsOmnifold
 process_params:
-  train_slice: [0., 0.3]
-  val_slice: [0.6, 0.65]
+  loader: theirs
+  train_slice: [0., 0.06]
+  val_slice: [0.06, 0.1]
   test_slice: [0.65, 1.0]
   training_file: "data/Pythia26_full.npz"
   analysis_file: "data/Herwig_full.npz"
@@ -14,10 +15,8 @@ process_params:
 # Preprocessing
 hard_preprocessing:
   uniform_noise_channels: []
-  erf_norm: False
 reco_preprocessing:
   uniform_noise_channels: []
-  erf_norm: False
 
 # Training
 lr: 1.e-3
@@ -26,15 +25,16 @@ batch_size: 128
 lr_scheduler: cosine_annealing
 weight_decay: 0.
 betas: [0.9, 0.999]
-epochs: 100
+epochs: 300
+
 
 # Architecture
 model: Classifier
-bayesian: True
+bayesian: False
 bayesian_samples: 20
 
-internal_size: 256
+internal_size: 80
 layers_per_block: 4
 dropout: 0.0
 
-evaluate_train: False
+evaluate_train: True

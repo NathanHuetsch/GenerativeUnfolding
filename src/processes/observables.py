@@ -128,7 +128,7 @@ def momenta_to_observables(
             compute=lambda p: return_obs(p[..., :], p[..., 4]),
             tex_label=r"\text{Groomed momentum fraction }z_g",
             bins=lambda obs: get_hardcoded_bins(
-                obs, n_bins=n_bins, lower=-0.05, upper=0.55
+                obs, n_bins=n_bins, lower=0.05, upper=0.55
             ),
             yscale="log",
         )

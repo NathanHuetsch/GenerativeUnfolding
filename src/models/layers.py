@@ -694,6 +694,23 @@ class LinearTrajectory(nn.Module):
     def beta_dot(self, t, beta_0=1.e-5, beta_1=1.e-4):
         return torch.where(t < 1. / 2., 2 * (beta_1 - beta_0), - 2 * (beta_1 - beta_0))
 
+class TrigonometricTrajectory(nn.Module):
+
+    def __init__(self,
+                 t_noise_scale=0,
+                 minimum_noise_scale=0):
+        super().__init__()
+        self.t_noise_scale = t_noise_scale
+        self.minimum_noise_scale = minimum_noise_scale
+
+        print(f"        Trajectory: Trigonometric with t_noise {self.t_noise_scale}"
+              f" and minimum_noise {self.minimum_noise_scale}")
+
+    def forward(self, x_0, x_1, t):
+        x_t = torch.cos(t*np.pi/2.) * x_0 + torch.sin(t*np.pi/2.) * x_1
+        x_t_dot = -torch.sin(t*np.pi/2.) * x_0 *np.pi/2. + torch.cos(t*np.pi/2.) * x_1*np.pi/2.
+        return x_t, x_t_dot
+
 
 class SDE_wrapper(torch.nn.Module):
     noise_type = "diagonal"

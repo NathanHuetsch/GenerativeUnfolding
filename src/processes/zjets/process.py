@@ -98,11 +98,14 @@ class ZJetsGenerative(Process):
             if subset == "analysis":
                 self.data["analysis"] = ProcessData(x_hard, x_reco)
             else:
-                slices = {"train": slice(0, 950000),
-                          "val": slice(950000, 1000000),
-                          "test": slice(1000000, 1600000)}
+                n_events = len(x_hard)
                 for subs in ["train", "test", "val"]:
-                    data_slice = slices[subs]
+                    low, high = self.params[f"{subs}_slice"]
+                    data_slice = slice(int(n_events * low), int(n_events * high))
+                    #slices = {"train": slice(0, 950000),
+                    #          "val": slice(950000, 1000000),
+                    #          "test": slice(1000000, 1600000)}
+                    #data_slice = slices[subs]
                     self.data[subs] = ProcessData(
                         x_hard[data_slice], x_reco[data_slice]
                     )
@@ -232,7 +235,10 @@ class ZJetsOmnifold(ZJetsGenerative):
         assert len(label) == n_events
         assert len(x_reco) == n_events
 
-        permutation = torch.randperm(n_events)
+        # using numpy to seed a fixed permutation for reproducibility of src plot
+        # torch.manual_seed() is not convenient because set_rng_state(prev_state) is not available on cuda
+        rng = np.random.RandomState(0) # anything generated with this rng is reproducible
+        permutation = torch.as_tensor(rng.permutation(n_events))
         x_hard = x_hard[permutation]
         x_reco = x_reco[permutation]
         label = label[permutation]

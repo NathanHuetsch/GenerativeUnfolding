@@ -278,51 +278,98 @@ class Model:
         self.model.eval()
         bayesian_samples = self.params.get("bayesian_samples", 20) if self.model.bayesian else 1
         n_unfoldings = self.params.get("n_unfoldings", 1)
-
+        
+        #if self.model.bayesian and bayesian_samples > n_unfoldings:
+        #    n_unfoldings = bayesian_samples
+        #    bayesian_samples += 1 
+        #elif self.model.bayesian and bayesian_samples <= n_unfoldings:
+        #    bayesian_samples = n_unfoldings + 1
+        #else:
+        #    pass
+        print("n_unfoldings: ", n_unfoldings)
+        print("bayesian_samples: ", bayesian_samples)
+        
         if loader is None:
             loader = self.test_loader
 
         with torch.no_grad():
             all_samples = []
             for i in range(bayesian_samples):
-                t0 = time.time()
                 unfoldings = []
                 if self.model.bayesian:
+                    t0 = time.time()
                     if i == 0:
                         for layer in self.model.bayesian_layers:
                             layer.map = True
+                        for j in range(n_unfoldings):
+                            tj0 = time.time()
+                            data_batches = []
+                            for xs, cs in self.progress(
+                                loader,
+                                desc="  Generating",
+                                leave=False,
+                                initial=i * len(loader),
+                                total=bayesian_samples * len(loader),
+                            ):
+                                while True:
+                                    try:
+                                        data_batches.append(self.model.sample(cs))
+                                        break
+                                    except AssertionError:
+                                        print(f"    Batch failed, repeating")
+                            print(f"    Finished bayesian sample {i}, unfolding {j} in {time.time() - tj0}", flush=True)
+                            unfoldings.append(torch.cat(data_batches, dim=0))
                     else:
                         for layer in self.model.bayesian_layers:
                             layer.map = False
                         self.model.reset_random_state()
+                        data_batches = []
+                        for xs, cs in self.progress(
+                            loader,
+                            desc="  Generating",
+                            leave=False,
+                            initial=i * len(loader),
+                            total=bayesian_samples * len(loader),
+                        ):
+                            while True:
+                                try:
+                                    data_batches.append(self.model.sample(cs))
+                                    break
+                                except AssertionError:
+                                    print(f"    Batch failed, repeating")
+                        unfoldings.append(torch.cat(data_batches, dim=0))
+                else:
+                    for j in range(n_unfoldings):
+                        tj0 = time.time()
+                        data_batches = []
+                        for xs, cs in self.progress(
+                            loader,
+                            desc="  Generating",
+                            leave=False,
+                            initial=i * len(loader),
+                            total=bayesian_samples * len(loader),
+                        ):
+                            while True:
+                                try:
+                                    data_batches.append(self.model.sample(cs))
+                                    break
+                                except AssertionError:
+                                    print(f"    Batch failed, repeating")
+                        unfoldings.append(torch.cat(data_batches, dim=0))
+                        print(f"    Finished unfolding {j} in {time.time() - tj0}", flush=True)
 
-                for j in range(n_unfoldings):
-                    data_batches = []
-                    for xs, cs in self.progress(
-                        loader,
-                        desc="  Generating",
-                        leave=False,
-                        initial=i * len(loader),
-                        total=bayesian_samples * len(loader),
-                    ):
-                        while True:
-                            try:
-                                data_batches.append(self.model.sample(cs))
-                                break
-                            except AssertionError:
-                                print(f"    Batch failed, repeating")
-                    unfoldings.append(torch.cat(data_batches, dim=0))
                 unfoldings = torch.stack(unfoldings, dim=0)
                 all_samples.append(unfoldings)
                 if self.model.bayesian:
                     print(f"    Finished bayesian sample {i} in {time.time() - t0}", flush=True)
-            all_samples = torch.stack(all_samples, dim=0)
-            print("Samples shape:", all_samples.shape)
-            if self.model.bayesian:
-                return all_samples#.reshape(bayesian_samples, -1, 6)
-            else:
-                return all_samples[0]#.reshape(-1, 6)
-
+            all_samples = torch.cat(all_samples, dim=0)
+            print("all samples shape:", all_samples.shape)
+            #if self.model.bayesian:
+            #    return all_samples#.reshape(bayesian_samples, -1, 6)
+            #else:
+            #    return all_samples#.reshape(-1, 6)
+            return all_samples
+        
     def predict_distribution(self, loader=None) -> torch.Tensor:
         """
         Predict multiple samples for a part of the test dataset

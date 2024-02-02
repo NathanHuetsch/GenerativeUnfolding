@@ -142,7 +142,8 @@ def evaluation_generative(
         x_reco_pp=data_reco_pp,
         bayesian=model.model.bayesian,
         show_metrics=True,
-        plot_metrics=params.get("plot_metrics", False)
+        plot_metrics=params.get("plot_metrics", False),
+        n_unfoldings = params.get("n_unfoldings", 1)
     )
     if name == "":
         print(f"    Plotting loss")
@@ -153,14 +154,15 @@ def evaluation_generative(
     else:
         pickle_file = None
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
-    plots.plot_observables_full(doc.add_file("observables_full" + name + ".pdf"), None)
+    #plots.plot_observables_full(doc.add_file("observables_full" + name + ".pdf"), None)
+    plots.save_metrics(doc.add_file("metrics" + name + ".pkl"))
 
-    if params.get("plot_metrics", False):
-        plots.hist_metrics_unfoldings(doc.add_file("unfolding_metrics"+name+".pdf"), pickle_file)
+    if params.get("plot_metrics", True):
+        plots.hist_metrics_unfoldings(doc.add_file("unfolding_metrics"+name+".pdf"))
         plots.plot_multiple_unfoldings(doc.add_file("unfolding_samples"+name+".pdf"))
 
         if model.model.bayesian:
-            plots.hist_metrics_bayesian(doc.add_file("bayesian_metrics" + name + ".pdf"), pickle_file)
+            #plots.hist_metrics_bayesian(doc.add_file("bayesian_metrics" + name + ".pdf"))
             plots.plot_multiple_bayesians(doc.add_file("bayesian_samples" + name + ".pdf"))
 
     if params.get("plot_preprocessed", False) and name == "":
@@ -172,10 +174,11 @@ def evaluation_generative(
     #plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
     #print(f"    Plotting single events")
     #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
-    #print(f"    Plotting migration")
+    print(f"    Plotting migration")
     #plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
-    plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"))
-    plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), gt_hard=True)
+
+    plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"), pickle_file=doc.add_file("migration2" + name + ".pkl"))
+    plots.plot_migration2(doc.add_file("gt_migration2" + name + ".pdf"), pickle_file=doc.add_file("gt_migration2" + name + ".pkl"), gt_hard=True)
     #if params.get("plot_gt_migration", True) and name == "":
         #plots.plot_migration(doc.add_file("gt_migration" + name + ".pdf"), gt_hard=True)
 
@@ -184,7 +187,6 @@ def evaluation_generative(
         file = doc.add_file("samples" + name + ".pkl")
         np.save(file, x_gen_single)
 
-    plots.save_metrics(doc.add_file("metrics" + name + ".pkl"))
 
 
 def evaluate_comparison(
@@ -196,9 +198,6 @@ def evaluate_comparison(
     name: str = ""):
 
     print(f"Checkpoint: {model_name},  Data: Comparison Set")
-    data_reco = torch.tensor(np.load('data/SB_Pythia_reco.npy')).to(model.device)
-    data_hard = torch.tensor(np.load('data/SB_Pythia_hard.npy')).to(model.device)
-    data_SB = torch.tensor(np.load('data/SB_Pythia_unfold.npy')).to(model.device)
     data_reco = torch.tensor(np.load('data/SB_Pythia_reco.npy')).to(model.device)
     data_hard = torch.tensor(np.load('data/SB_Pythia_hard.npy')).to(model.device)
     data_SB = torch.tensor(np.load('data/SB_Pythia_unfold.npy')).to(model.device)
@@ -238,7 +237,8 @@ def evaluate_comparison(
         x_gen_dist=x_gen_dist,
         x_compare=data_SB,
         bayesian=model.model.bayesian,
-        show_metrics=True
+        show_metrics=True,
+        n_unfoldings = params.get("n_unfoldings", 1)
     )
     print(f"    Plotting observables")
     if params.get("save_hist_data", True):
@@ -246,9 +246,66 @@ def evaluate_comparison(
     else:
         pickle_file = None
     plots.plot_observables(doc.add_file("observables_comparison"+name+".pdf"), pickle_file)
-    plots.plot_migration2(doc.add_file("SB_migration2" + name + ".pdf"), SB_hard=True)
+    print(f"    Plotting migration")
+    plots.plot_migration2(doc.add_file("SB_migration2" + name + ".pdf"), SB_hard=True, pickle_file=doc.add_file("SB_migration2" + name + ".pkl"))
 
+def evaluate_analysis_withSB(
+    doc: Documenter,
+    params: dict,
+    model: Model,
+    process: Process,
+    model_name: str = "final",
+    name: str = ""):
 
+    print(f"Checkpoint: {model_name},  Data: Analysis Set, Including SB")
+    data_reco = torch.tensor(np.load('data/SB_Herwig_reco.npy')).to(model.device)
+    data_hard = torch.tensor(np.load('data/SB_Herwig_hard.npy')).to(model.device)
+    data_SB = torch.tensor(np.load('data/SB_Herwig_unfold.npy')).to(model.device)
+
+    loader_kwargs = {"shuffle": False, "batch_size": 10*params["batch_size"], "drop_last": False}
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(model.hard_pp(data_hard).float(),
+                                       model.reco_pp(data_reco).float()),
+        **loader_kwargs,
+    )
+
+    model.load(model_name)
+
+    print(f"    Generating single samples")
+    t0 = time.time()
+    x_gen_single = model.predict(loader=loader)
+    t1 = time.time()
+    time_diff = timedelta(seconds=round(t1 - t0))
+    print(f"    Generation completed after {time_diff}")
+
+    print(f"    Generating distributions")
+    x_gen_dist = model.predict_distribution(loader=loader)
+
+    if params.get("compute_test_loss", False):
+        print(f"    Computing test loss")
+        test_ll = model.dataset_loss(loader=loader)["loss"]
+        print(f"    Result: {test_ll:.4f}")
+
+    print(f"    Computing observables")
+    observables = process.hard_observables()
+    plots = Plots(
+        observables=observables,
+        losses=model.losses,
+        x_hard=data_hard,
+        x_reco=data_reco,
+        x_gen_single=x_gen_single,
+        x_gen_dist=x_gen_dist,
+        x_compare=data_SB,
+        bayesian=model.model.bayesian,
+        show_metrics=True,
+        n_unfoldings = params.get("n_unfoldings", 1)
+    )
+    print(f"    Plotting observables")
+    if params.get("save_hist_data", True):
+        pickle_file = doc.add_file("observables_analysis_wSB"+name+".pkl")
+    else:
+        pickle_file = None
+    plots.plot_observables(doc.add_file("observables_analysis_wSB"+name+".pdf"), pickle_file)
 
 def evaluation_omnifold(
     doc: Documenter,
@@ -308,9 +365,15 @@ def evaluation_omnifold(
     print(f"    Plotting weights")
     plots.plot_weights(doc.add_file("weights"+name+".pdf"))
     print(f"    Plotting reco")
-    plots.plot_reco(doc.add_file("reco"+name+".pdf"))
+    if params.get("save_hist_data", False):
+        plots.plot_reco(doc.add_file("reco"+name+".pdf"), doc.add_file("reco"+name+".pkl"))
+    else:
+        plots.plot_reco(doc.add_file("reco"+name+".pdf"))
     print(f"    Plotting hard")
-    plots.plot_hard(doc.add_file("hard"+name+".pdf"))
+    if params.get("save_hist_data", False):
+        plots.plot_hard(doc.add_file("hard"+name+".pdf"), doc.add_file("hard"+name+".pkl"))
+    else:
+        plots.plot_hard(doc.add_file("hard"+name+".pdf"))
     print(f"    Plotting Observables")
     if params.get("save_hist_data", False):
         pickle_file = doc.add_file("observables"+name+".pkl")
@@ -337,6 +400,8 @@ def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
             evaluation(doc, params, model, process, model_name="best", data="train", name="_best_train")
     if evaluate_analysis:
         evaluation(doc, params, model, process, data="analysis", name="_analysis")
-
+    
+    if params.get("evaluate_analysis_wSB", False):
+        evaluate_analysis_withSB(doc, params, model, process)
     if params.get("evaluate_comparison", False):
         evaluate_comparison(doc, params, model, process)

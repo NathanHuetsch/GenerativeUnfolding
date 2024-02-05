@@ -225,11 +225,23 @@ class ZJetsOmnifold(ZJetsGenerative):
 
             x_hard.append(torch.tensor(x_hard_subset))
             x_reco.append(torch.tensor(x_reco_subset))
+        # using numpy to seed a fixed permutation for reproducibility of src plot
+        # torch.manual_seed() is not convenient because set_rng_state(prev_state) is not available on cuda
+        rng = np.random.RandomState(0) # anything generated with this rng is reproducible
 
-        label = [torch.ones((len(x_hard[0]), 1)), torch.zeros((len(x_hard[1]), 1))]
-        label = torch.cat(label).to(torch.float32).to(self.device)
-        x_hard = torch.cat(x_hard).to(torch.float32).to(self.device)
-        x_reco = torch.cat(x_reco).to(torch.float32).to(self.device)
+        if self.params.get("pythia_only", False):
+            print("\n Using only Pythia data - training on mapping reco (50%) onto reco (50%)\n")
+            x_hard = x_hard[0] # keep only pythia
+            x_reco = x_reco[0] # keep only pythia
+            label = [torch.ones((int(0.5*len(x_hard)), 1)), torch.zeros((len(x_hard) - int(0.5*len(x_hard)), 1))]
+            label = torch.cat(label).to(torch.float32).to(self.device)
+            x_hard = x_hard.to(torch.float32).to(self.device)
+            x_reco = x_reco.to(torch.float32).to(self.device)
+        else:    
+            label = [torch.ones((len(x_hard[0]), 1)), torch.zeros((len(x_hard[1]), 1))]
+            label = torch.cat(label).to(torch.float32).to(self.device)
+            x_hard = torch.cat(x_hard).to(torch.float32).to(self.device)
+            x_reco = torch.cat(x_reco).to(torch.float32).to(self.device)
 
         n_events = len(x_hard)
         assert len(label) == n_events
@@ -237,7 +249,6 @@ class ZJetsOmnifold(ZJetsGenerative):
 
         # using numpy to seed a fixed permutation for reproducibility of src plot
         # torch.manual_seed() is not convenient because set_rng_state(prev_state) is not available on cuda
-        rng = np.random.RandomState(0) # anything generated with this rng is reproducible
         permutation = torch.as_tensor(rng.permutation(n_events))
         x_hard = x_hard[permutation]
         x_reco = x_reco[permutation]
@@ -245,6 +256,7 @@ class ZJetsOmnifold(ZJetsGenerative):
 
         for subs in ["train", "test", "val"]:
             low, high = self.params[f"{subs}_slice"]
+            print(f"{subs}_slice: {low} - {high}")
             data_slice = slice(int(n_events * low), int(n_events * high))
             self.data[subs] = ProcessData(
                 x_hard=x_hard[data_slice],

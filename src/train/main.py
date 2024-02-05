@@ -143,7 +143,8 @@ def evaluation_generative(
         bayesian=model.model.bayesian,
         show_metrics=True,
         plot_metrics=params.get("plot_metrics", False),
-        n_unfoldings = params.get("n_unfoldings", 1)
+        n_unfoldings = params.get("n_unfoldings", 1),
+        debug = False,
     )
     if name == "":
         print(f"    Plotting loss")
@@ -355,7 +356,9 @@ def evaluation_omnifold(
         labels=data.label,
         predictions=predictions,
         bayesian=model.model.bayesian,
-        show_metrics=True
+        show_metrics=True,
+        pythia_only = params["process_params"].get("pythia_only", False),
+        debug = False,
     )
     if name == "":
         print(f"    Plotting loss")
@@ -365,17 +368,17 @@ def evaluation_omnifold(
     print(f"    Plotting weights")
     plots.plot_weights(doc.add_file("weights"+name+".pdf"))
     print(f"    Plotting reco")
-    if params.get("save_hist_data", False):
+    if params.get("save_hist_data", True):
         plots.plot_reco(doc.add_file("reco"+name+".pdf"), doc.add_file("reco"+name+".pkl"))
     else:
         plots.plot_reco(doc.add_file("reco"+name+".pdf"))
     print(f"    Plotting hard")
-    if params.get("save_hist_data", False):
+    if params.get("save_hist_data", True):
         plots.plot_hard(doc.add_file("hard"+name+".pdf"), doc.add_file("hard"+name+".pkl"))
     else:
         plots.plot_hard(doc.add_file("hard"+name+".pdf"))
     print(f"    Plotting Observables")
-    if params.get("save_hist_data", False):
+    if params.get("save_hist_data", True):
         pickle_file = doc.add_file("observables"+name+".pkl")
     else:
         pickle_file = None

@@ -47,6 +47,7 @@ class Plots:
         plot_metrics: bool = False,
         n_unfoldings: int = 1,
         bayesian_samples: int = 1,
+        debug: bool = False,
     ):
         """
         Initializes the plotting pipeline with the data to be plotted.
@@ -102,6 +103,7 @@ class Plots:
         self.plot_metrics = plot_metrics
         self.n_unfoldings = n_unfoldings
         self.bayesian_samples = bayesian_samples
+        self.debug = debug
         if self.show_metrics:
             print(f"    Computing metrics")
             self.compute_metrics()
@@ -119,28 +121,73 @@ class Plots:
             file: Output file name
         """
         with PdfPages(file) as pp:
+            loss_counter = 0
             self.plot_single_loss(
                 pp,
                 "loss",
                 (self.losses["tr_loss"], self.losses["val_loss"]),
                 ("train", "val"),
             )
-            if self.bayesian:
+            loss_counter += 2
+
+            bce_bool = False,
+            mse_bool = False,
+            kl_bool = False,
+            lr_bool = False
+            movAvg_bool = False
+            for l in self.losses:
+                if 'bce' in l:
+                    bce_bool = True
+                elif 'mse' in l:
+                    mse_bool = True
+                elif 'kl' in l:
+                    kl_bool = True
+                elif 'lr' in l:
+                    lr_bool = True
+                elif 'movAvg' in l:
+                    movAvg_bool = True
+                else:
+                    continue
+
+            if bce_bool:
                 self.plot_single_loss(
                     pp,
-                    "INN loss",
-                    (self.losses["train_inn_loss"], self.losses["val_inn_loss"]),
+                    "BCE loss",
+                    (self.losses["tr_bce"], self.losses["val_bce"]),
                     ("train", "val"),
                 )
+                loss_counter += 2
+            if mse_bool:
+                self.plot_single_loss(
+                    pp,
+                    "MSE loss",
+                    (self.losses["tr_mse"], self.losses["val_mse"]),
+                    ("train", "val"),
+                )
+                loss_counter += 2
+            if kl_bool:
                 self.plot_single_loss(
                     pp,
                     "KL loss",
-                    (self.losses["train_kl_loss"], self.losses["val_kl_loss"]),
+                    (self.losses["tr_kl"], self.losses["val_kl"]),
                     ("train", "val"),
                 )
-            self.plot_single_loss(
-                pp, "learning rate", (self.losses["lr"],), (None,), "log"
-            )
+                loss_counter += 2
+            if lr_bool:
+                self.plot_single_loss(
+                    pp, "learning rate", (self.losses["lr"],), (None,), "log"
+                )
+                loss_counter += 1
+            if movAvg_bool:
+                #self.plot_single_loss(
+                #    pp, "val mov. Avg.", (self.losses["movAvg"],), (None,), "log"
+                #)
+                loss_counter += 1
+        
+        if loss_counter < len(self.losses):
+            print(f"Not all ({len(self.losses)}) losses being plotted ({loss_counter})")
+            print("Losses:", [l for l in self.losses])
+
 
     def plot_single_loss(
         self,
@@ -161,8 +208,8 @@ class Plots:
         """
         fig, ax = plt.subplots(figsize=(4, 3.5))
         for i, (curve, label) in enumerate(zip(curves, labels)):
-            epochs = np.arange(6, len(curve) + 6)
-            ax.plot(epochs[5:], curve[5:], label=label)
+            epochs = np.arange(6, len(curve))
+            ax.plot(epochs + 1, curve[6:], label=label)
         ax.set_xlabel("epoch")
         ax.set_ylabel(ylabel)
         ax.set_yscale(yscale)
@@ -186,7 +233,7 @@ class Plots:
 
                 y_hard, y_hard_err = self.compute_hist_data(bins, data_hard, bayesian=False)
                 y_reco, y_reco_err = self.compute_hist_data(bins, data_reco, bayesian=False)
-                y_gen, y_gen_err = self.compute_hist_data(bins, data_gen[0], bayesian=False)# if it is not bayesian the MAP0 is just the first unfolding
+                y_gen, y_gen_err = self.compute_hist_data(bins, data_gen[0], bayesian=False) # if it is not bayesian the MAP0 is just the first unfolding
                 
                 lines = [
                     Line(
@@ -211,19 +258,24 @@ class Plots:
                 ]
                 data_n = data_gen.shape[-1]
                 data_MAP = data_gen[:self.n_unfoldings].reshape(-1)
-                y_gen_full, y_gen_full_err = self.compute_hist_data(bins, data_MAP, bayesian=False)
 
                 if self.bayesian:
                     data_nonMAP = data_gen[self.n_unfoldings:].reshape(len(data_gen[self.n_unfoldings:]), -1)
-                    _, y_gen_full_err = self.compute_hist_data(bins, data_nonMAP, bayesian=self.bayesian) 
-                
+                    y_gen_full, _ = self.compute_hist_data(bins, data_MAP, bayesian=False, weights=np.full_like(data_MAP, 1. / self.n_unfoldings))
+                    _, y_gen_full_err = self.compute_hist_data(bins, data_nonMAP, bayesian=self.bayesian)
+                    if self.debug:
+                        print("\n data_nonMAP shape:", data_nonMAP.shape)
+                        print("MAP error", _)
+                        print("nonMAP error", y_gen_full_err)
+                else:
+                    y_gen_full, y_gen_full_err = self.compute_hist_data(bins, data_MAP, bayesian=False)
                 lines.append(
                     Line(
                         y=y_gen_full,
                         y_err=y_gen_full_err,
                         y_ref=y_hard,
                         label=f"{self.n_unfoldings} MAP Unfoldings" if self.bayesian else f"{self.n_unfoldings} Unfoldings",
-                        color=self.colors[4]
+                        color=self.colors[4],
                     )
                 )
                 if self.compare:
@@ -425,7 +477,6 @@ class Plots:
         no_scale: bool = False,
         yscale: Optional[str] = None,
         metrics = None,
-        debug: bool = False,
     ):
         """
         Makes a single histogram plot, used for the observable histograms and clustering
@@ -463,7 +514,7 @@ class Plots:
                     scale = 1.
                     ref_scale = 1.
                 
-                if debug: print("Actual values plotted:", line.y * scale)
+                if self.debug: print("Actual values plotted:", line.y * scale)
                 self.hist_line(
                     axs[0],
                     bins,
@@ -788,7 +839,7 @@ class Plots:
                             y_err=None,
                             label=f"EMD non-MAP {len(obs.metrics['non_MAP_single_emd_arrs'])} single-Bayesians",
                             color=self.colors[0],
-                            linestyle='dotted',
+                            linestyle='dashed',
                         ),
                         Line(
                             y=emd_MAP_hist,
@@ -812,7 +863,7 @@ class Plots:
                             y_err=None,
                             label=f"Triangle non-MAP {len(obs.metrics['non_MAP_single_triangle_arrs'])} single-Bayesians",
                             color=self.colors[0],
-                            linestyle='dotted',
+                            linestyle='dashed',
                         ),
                         Line(
                             y=triangle_MAP_hist,
@@ -999,7 +1050,7 @@ class Plots:
                         y_err=None,
                         y_ref=y_hard,
                         label=f"{self.n_unfoldings} MAP Unfoldings" if self.bayesian else f"{self.n_unfoldings} Unfoldings",
-                        color=self.colors[5],
+                        color=self.colors[4],
                     ),
                 ]
 
@@ -1021,7 +1072,7 @@ class Plots:
                 obs_emds = obs.metrics["MAP_single_emd_arrs"] if self.bayesian else obs.metrics["single_emd_arrs"]
                 emd_argsort = np.argsort(obs_emds)
 
-                for i in range(1):
+                for i in range(2):
                     index = emd_argsort[i]
                     d = data_MAP[index]
                     y, _ = self.compute_hist_data(bins, d, bayesian=False)
@@ -1031,7 +1082,7 @@ class Plots:
                             y_err=None,
                             y_ref=y_hard,
                             label=f"MAP Best, {index}" if self.bayesian else f"Unf. Best, {index}",
-                            color=self.colors[4+i],
+                            color=self.colors[5+i],
                             linestyle="dashed"
                         ) 
                     )
@@ -1099,7 +1150,7 @@ class Plots:
                 obs_emds = obs.metrics["non_MAP_single_emd_arrs"]
                 emd_argsort = np.argsort(obs_emds)
 
-                for i in range(1):
+                for i in range(2):
                     index = emd_argsort[i]
                     d = data_nonMAP[index]
                     y, _ = self.compute_hist_data(bins, d, bayesian=False)
@@ -1109,7 +1160,7 @@ class Plots:
                             y_err=None,
                             y_ref=y_hard,
                             label=f"non-MAP Best, {index}",
-                            color=self.colors[4+i],
+                            color=self.colors[5+i],
                             linestyle="dashed"
                         )
                     )
@@ -1227,7 +1278,9 @@ class OmnifoldPlots(Plots):
         labels: torch.Tensor,
         predictions: torch.Tensor,
         bayesian: bool = False,
-        show_metrics: bool = True
+        show_metrics: bool = True,
+        pythia_only: bool = False,
+        debug: bool = False,
     ):
         """
         Initializes the plotting pipeline with the data to be plotted.
@@ -1265,7 +1318,8 @@ class OmnifoldPlots(Plots):
             self.compute_metrics_reco()
             print(f"    Computing metrics for hard datasets")
             self.compute_metrics_hard()
-
+        self.pythia_only = pythia_only
+        self.debug = debug
         plt.rc("font", family="serif", size=16)
         plt.rc("axes", titlesize="medium")
         plt.rc("text.latex", preamble=r"\usepackage{amsmath}")
@@ -1423,22 +1477,39 @@ class OmnifoldPlots(Plots):
             else:
                 weights_pythia = self.weights[self.labels.squeeze()]
                 weights_herwig = self.weights[~self.labels.squeeze()]
-            bins = np.logspace(-1.5, 1.5, 128)
+            
+            xlim_bins = [-1.5, 1.5]
+            bins = np.logspace(*xlim_bins, 128)
             y_pythia, y_pythia_err = self.compute_hist_data(bins, weights_pythia, bayesian=False)
             y_herwig, y_herwig_err = self.compute_hist_data(bins, weights_herwig, bayesian=False)
-
-
+            '''
+            original_bins = xlim_bins.copy()
+            while True and xlim_bins[0] < xlim_bins[1]:
+                bins = np.logspace(*xlim_bins, 128)
+                y_pythia, y_pythia_err = self.compute_hist_data(bins, weights_pythia, bayesian=False)
+                y_herwig, y_herwig_err = self.compute_hist_data(bins, weights_herwig, bayesian=False)
+                if len(y_pythia[y_pythia>0])>5 or len(y_herwig[y_herwig>0])>5: # making sure that I have at least 5 non-empty bins, otherwise zoom in (number of bins stays the same)
+                    print(y_pythia, y_herwig)
+                    break
+                else:
+                    if xlim_bins[0] + 0.01 * original_bins[0] > -1e-4 or xlim_bins[1] - 0.01 * original_bins[1] < 1e-4:
+                        break
+                    else:
+                        print("Adapting range to plot weights")
+                        xlim_bins[0] += 0.01 * original_bins[0]
+                        xlim_bins[1] -= 0.01 * original_bins[1]
+            '''
             lines = [
                         Line(
                             y=y_pythia,
                             y_err=None,
-                            label="Pythia",
+                            label="Pythia" if not self.pythia_only else "Pythia 1",
                             color=self.colors[2],
                         ),
                         Line(
                             y=y_herwig,
                             y_err=None,
-                            label="Herwig",
+                            label="Herwig" if not self.pythia_only else "Pythia 2",
                             color=self.colors[0],
                         ),
                     ]
@@ -1466,13 +1537,14 @@ class OmnifoldPlots(Plots):
                     Line(
                         y=y_pythia,
                         y_err=y_pythia_err,
-                        label="Pythia Reco",
+                        y_ref=None if not self.pythia_only else y_herwig,
+                        label="Pythia Reco" if not self.pythia_only else "Pythia Reco 1",
                         color=self.colors[2],
                     ),
                     Line(
                         y=y_herwig,
                         y_err=y_herwig_err,
-                        label="Herwig Reco",
+                        label="Herwig Reco" if not self.pythia_only else "Pythia Reco 2",
                         color=self.colors[0],
                     ),
                     Line(
@@ -1517,13 +1589,14 @@ class OmnifoldPlots(Plots):
                     Line(
                         y=y_pythia,
                         y_err=y_pythia_err,
-                        label="Pythia Hard",
+                        y_ref=None if not self.pythia_only else y_herwig,
+                        label="Pythia Hard" if not self.pythia_only else "Pythia Hard 1",
                         color=self.colors[2],
                     ),
                     Line(
                         y=y_herwig,
                         y_err=y_herwig_err,
-                        label="Herwig Hard",
+                        label="Herwig Hard" if not self.pythia_only else "Pythia Hard 2",
                         color=self.colors[0],
                     ),
                     Line(
@@ -1569,13 +1642,13 @@ class OmnifoldPlots(Plots):
                     Line(
                         y=y_reco,
                         y_err=y_reco_err,
-                        label="Reco",
+                        label="Reco" if not self.pythia_only else "Pythia Reco 2",
                         color=self.colors[2],
                     ),
                     Line(
                         y=y_hard,
                         y_err=y_hard_err,
-                        label="Hard",
+                        label="Hard" if not self.pythia_only else "Pythia Hard 2",
                         color=self.colors[0],
                     ),
                     Line(

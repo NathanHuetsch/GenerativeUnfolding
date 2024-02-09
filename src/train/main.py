@@ -359,6 +359,7 @@ def evaluation_omnifold(
         show_metrics=True,
         pythia_only = params["process_params"].get("pythia_only", False),
         debug = False,
+        invert_reweighting=params["process_params"].get("invert_reweighting", False),
     )
     if name == "":
         print(f"    Plotting loss")

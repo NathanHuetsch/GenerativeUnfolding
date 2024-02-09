@@ -130,11 +130,13 @@ class Plots:
             )
             loss_counter += 2
 
-            bce_bool = False,
-            mse_bool = False,
-            kl_bool = False,
+            bce_bool = False
+            mse_bool = False
+            kl_bool = False
+            nll_bool = False
             lr_bool = False
             movAvg_bool = False
+
             for l in self.losses:
                 if 'bce' in l:
                     bce_bool = True
@@ -142,6 +144,8 @@ class Plots:
                     mse_bool = True
                 elif 'kl' in l:
                     kl_bool = True
+                elif 'nll' in l:
+                    nll_bool = True
                 elif 'lr' in l:
                     lr_bool = True
                 elif 'movAvg' in l:
@@ -173,16 +177,24 @@ class Plots:
                     ("train", "val"),
                 )
                 loss_counter += 2
+            if nll_bool:
+                self.plot_single_loss(
+                    pp,
+                    "NLL loss",
+                    (self.losses["tr_nll"], self.losses["val_nll"]),
+                    ("train", "val"),
+                )
+                loss_counter += 2
             if lr_bool:
                 self.plot_single_loss(
                     pp, "learning rate", (self.losses["lr"],), (None,), "log"
                 )
                 loss_counter += 1
             if movAvg_bool:
-                #self.plot_single_loss(
-                #    pp, "val mov. Avg.", (self.losses["movAvg"],), (None,), "log"
-                #)
-                loss_counter += 1
+                self.plot_single_loss(
+                    pp, "mov. Avg.", (self.losses["movAvg"], self.losses["val_movAvg"]), ("train", "val",), "log"
+                )
+                loss_counter += 2
         
         if loss_counter < len(self.losses):
             print(f"Not all ({len(self.losses)}) losses being plotted ({loss_counter})")
@@ -561,6 +573,7 @@ class Plots:
                 axs[-1].text(bins[0], 0.2, f"10*EMD: {metrics[0]:.4f} $\pm$ {metrics[1]:.5f}"
                                         f"    ;    1e3*TriDist: {metrics[2]:.5f} $\pm$ "
                                         f"{metrics[3]:.4f}", fontsize=13)
+                axs[-1].set_yticks([])
             unit = "" if observable.unit is None else f" [{observable.unit}]"
             axs[-1].set_xlabel(f"${{{observable.tex_label}}}${unit}")
             axs[-1].set_xscale(observable.xscale)
@@ -1281,6 +1294,7 @@ class OmnifoldPlots(Plots):
         show_metrics: bool = True,
         pythia_only: bool = False,
         debug: bool = False,
+        invert_reweighting: bool = False,
     ):
         """
         Initializes the plotting pipeline with the data to be plotted.
@@ -1295,9 +1309,16 @@ class OmnifoldPlots(Plots):
         """
         self.observables = observables
         self.losses = losses
+        if invert_reweighting: print("Reweighting Pythia onto Herwig")
+        #labels = 1 - labels if invert_reweighting else labels
         self.labels = labels.cpu().bool().numpy()
-        self.predictions = predictions.cpu().numpy()
+        self.predictions = predictions.cpu().numpy() if not invert_reweighting else (1-predictions).cpu().numpy()
         self.weights = np.clip((1. - self.predictions)/self.predictions, 0., 200).squeeze()
+        self.bayesian = bayesian
+        self.show_metrics = show_metrics
+        self.pythia_only = pythia_only
+        self.debug = debug
+        self.invert_reweighting = invert_reweighting
 
         self.obs_hard = []
         self.obs_reco = []
@@ -1309,8 +1330,6 @@ class OmnifoldPlots(Plots):
             self.obs_reco.append(o_reco.cpu().numpy())
             self.bins.append(obs.bins(o_hard).cpu().numpy())
 
-        self.bayesian = bayesian
-        self.show_metrics = show_metrics
         if self.show_metrics:
             print(f"    Computing metrics for observables")
             self.compute_metrics()
@@ -1318,8 +1337,6 @@ class OmnifoldPlots(Plots):
             self.compute_metrics_reco()
             print(f"    Computing metrics for hard datasets")
             self.compute_metrics_hard()
-        self.pythia_only = pythia_only
-        self.debug = debug
         plt.rc("font", family="serif", size=16)
         plt.rc("axes", titlesize="medium")
         plt.rc("text.latex", preamble=r"\usepackage{amsmath}")
@@ -1438,7 +1455,7 @@ class OmnifoldPlots(Plots):
 
         with PdfPages(file) as pp:
             for obs, bins, data in zip(self.observables, self.bins, self.obs_reco):
-                binned_classes_test, _, _ = binned_statistic(data, self.labels.T, bins=bins)
+                binned_classes_test, _, _ = binned_statistic(data, self.labels.T, bins=bins) if not self.invert_reweighting else binned_statistic(data, ~self.labels.T, bins=bins)
                 if self.bayesian:
                     binned_classes_predict, _, _ = binned_statistic(data, self.predictions[0].T, bins=bins)
                 else:
@@ -1482,23 +1499,21 @@ class OmnifoldPlots(Plots):
             bins = np.logspace(*xlim_bins, 128)
             y_pythia, y_pythia_err = self.compute_hist_data(bins, weights_pythia, bayesian=False)
             y_herwig, y_herwig_err = self.compute_hist_data(bins, weights_herwig, bayesian=False)
-            '''
+
             original_bins = xlim_bins.copy()
             while True and xlim_bins[0] < xlim_bins[1]:
                 bins = np.logspace(*xlim_bins, 128)
                 y_pythia, y_pythia_err = self.compute_hist_data(bins, weights_pythia, bayesian=False)
                 y_herwig, y_herwig_err = self.compute_hist_data(bins, weights_herwig, bayesian=False)
-                if len(y_pythia[y_pythia>0])>5 or len(y_herwig[y_herwig>0])>5: # making sure that I have at least 5 non-empty bins, otherwise zoom in (number of bins stays the same)
-                    print(y_pythia, y_herwig)
+                if len(y_pythia[y_pythia>0])>20 or len(y_herwig[y_herwig>0])>20: # making sure that I have at least 20 non-empty bins, otherwise zoom in (number of bins stays the same)
                     break
                 else:
-                    if xlim_bins[0] + 0.01 * original_bins[0] > -1e-4 or xlim_bins[1] - 0.01 * original_bins[1] < 1e-4:
+                    if xlim_bins[0] - 0.01 * original_bins[0] > -1e-4 or xlim_bins[1] - 0.01 * original_bins[1] < 1e-4:
                         break
                     else:
-                        print("Adapting range to plot weights")
-                        xlim_bins[0] += 0.01 * original_bins[0]
+                        xlim_bins[0] -= 0.01 * original_bins[0]
                         xlim_bins[1] -= 0.01 * original_bins[1]
-            '''
+
             lines = [
                         Line(
                             y=y_pythia,
@@ -1527,11 +1542,12 @@ class OmnifoldPlots(Plots):
 
                 data_pythia = data[self.labels.squeeze()]
                 data_herwig = data[~self.labels.squeeze()]
-                weights_pythia = self.weights[..., self.labels.squeeze()]
+                weights = self.weights[..., self.labels.squeeze()] if not self.invert_reweighting else self.weights[..., ~self.labels.squeeze()]
+                
 
                 y_pythia, y_pythia_err = self.compute_hist_data(bins, data_pythia, bayesian=False)
                 y_herwig, y_herwig_err = self.compute_hist_data(bins, data_herwig, bayesian=False)
-                y_reweight, y_reweight_err = self.compute_hist_data(bins, data_pythia, bayesian=self.bayesian, weights=weights_pythia)
+                y_reweight, y_reweight_err = self.compute_hist_data(bins, data_pythia, bayesian=self.bayesian, weights=weights) if not self.invert_reweighting else self.compute_hist_data(bins, data_herwig, bayesian=self.bayesian, weights=weights)
 
                 lines = [
                     Line(
@@ -1550,7 +1566,7 @@ class OmnifoldPlots(Plots):
                     Line(
                         y=y_reweight,
                         y_err=y_reweight_err,
-                        y_ref=y_herwig,
+                        y_ref=y_herwig if not self.invert_reweighting else y_pythia,
                         label="Omnifold" if not self.bayesian else "bOmnifold",
                         color=self.colors[1],
                     ),
@@ -1578,12 +1594,11 @@ class OmnifoldPlots(Plots):
             for obs, bins, data in zip(self.observables, self.bins, self.obs_hard):
                 data_pythia = data[self.labels.squeeze()]
                 data_herwig = data[~self.labels.squeeze()]
-                weights_pythia = self.weights[..., self.labels.squeeze()]
+                weights = self.weights[..., self.labels.squeeze()] if not self.invert_reweighting else self.weights[..., ~self.labels.squeeze()]
 
                 y_pythia, y_pythia_err = self.compute_hist_data(bins, data_pythia, bayesian=False)
                 y_herwig, y_herwig_err = self.compute_hist_data(bins, data_herwig, bayesian=False)
-                y_reweight, y_reweight_err = self.compute_hist_data(bins, data_pythia, bayesian=self.bayesian,
-                                                                    weights=weights_pythia)
+                y_reweight, y_reweight_err = self.compute_hist_data(bins, data_pythia, bayesian=self.bayesian, weights=weights) if not self.invert_reweighting else self.compute_hist_data(bins, data_herwig, bayesian=self.bayesian, weights=weights)
 
                 lines = [
                     Line(
@@ -1602,7 +1617,7 @@ class OmnifoldPlots(Plots):
                     Line(
                         y=y_reweight,
                         y_err=y_reweight_err,
-                        y_ref=y_herwig,
+                        y_ref=y_herwig if not self.invert_reweighting else y_pythia,
                         label="Omnifold" if not self.bayesian else "bOmnifold",
                         color=self.colors[1],
                     ),
@@ -1630,14 +1645,16 @@ class OmnifoldPlots(Plots):
             for obs, bins, data_hard, data_reco in zip(
             self.observables, self.bins, self.obs_hard, self.obs_reco):
 
-                data_reco = data_reco[~self.labels.squeeze()]
-                data_hard_herwig = data_hard[~self.labels.squeeze()]
-                data_hard_pythia = data_hard[self.labels.squeeze()]
-                weights = self.weights[..., self.labels.squeeze()]
+                
+                data_reco = data_reco[~self.labels.squeeze()] if not self.invert_reweighting else data_reco[self.labels.squeeze()] # herwig reco OR pythia reco
+                data_pythia_hard = data_hard[self.labels.squeeze()]
+                data_herwig_hard = data_hard[~self.labels.squeeze()]
+                weights = self.weights[..., self.labels.squeeze()] if not self.invert_reweighting else self.weights[..., ~self.labels.squeeze()]
 
-                y_hard, y_hard_err = self.compute_hist_data(bins, data_hard_herwig, bayesian=False)
+                y_hard, y_hard_err = self.compute_hist_data(bins, data_herwig_hard, bayesian=False) if not self.invert_reweighting else self.compute_hist_data(bins, data_pythia_hard, bayesian=False)
                 y_reco, y_reco_err = self.compute_hist_data(bins, data_reco, bayesian=False)
-                y_gen, y_gen_err = self.compute_hist_data(bins, data_hard_pythia, bayesian=self.bayesian, weights=weights)
+                y_gen, y_gen_err = self.compute_hist_data(bins, data_pythia_hard, bayesian=self.bayesian, weights=weights) if not self.invert_reweighting else self.compute_hist_data(bins, data_herwig_hard, bayesian=self.bayesian, weights=weights)
+
                 lines = [
                     Line(
                         y=y_reco,
@@ -1676,16 +1693,16 @@ class OmnifoldPlots(Plots):
         for obs, bins, data_hard, data_reco in zip(
                 self.observables, self.bins, self.obs_hard, self.obs_reco):
 
-            data_hard_herwig = data_hard[~self.labels.squeeze()]
-            data_hard_pythia = data_hard[self.labels.squeeze()]
-            weights = self.weights[..., self.labels.squeeze()]
+            hard_ref = data_hard[~self.labels.squeeze()] if not self.invert_reweighting else data_hard[self.labels.squeeze()]
+            hard_to_reweight = data_hard[self.labels.squeeze()] if not self.invert_reweighting else data_hard[~self.labels.squeeze()]
+            weights = self.weights[..., self.labels.squeeze()] if not self.invert_reweighting else self.weights[..., ~self.labels.squeeze()]
 
             if not self.bayesian:
-                emd_mean, emd_std = GetEMD(data_hard_herwig, data_hard_pythia, nboot=10, weights_arr=weights)
-                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_hard_herwig, data_hard_pythia, bins, nboot=10, weights=weights)
+                emd_mean, emd_std = GetEMD(hard_ref, hard_to_reweight, nboot=10, weights_arr=weights)
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(hard_ref, hard_to_reweight, bins, nboot=10, weights=weights)
             else:
-                emd_mean, emd_std = GetEMD(data_hard_herwig, data_hard_pythia, nboot=10, weights_arr=weights[0])
-                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_hard_herwig, data_hard_pythia, bins,
+                emd_mean, emd_std = GetEMD(hard_ref, hard_to_reweight, nboot=10, weights_arr=weights[0])
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(hard_ref, hard_to_reweight, bins,
                                                                               nboot=10, weights=weights[0])
             #else:
             #    emd = []
@@ -1708,17 +1725,17 @@ class OmnifoldPlots(Plots):
     def compute_metrics_reco(self):
         for obs, bins, data in zip(self.observables, self.bins, self.obs_reco):
 
-            data_herwig = data[~self.labels.squeeze()]
-            data_pythia = data[self.labels.squeeze()]
-            weights = self.weights[..., self.labels.squeeze()]
+            reco_ref = data[~self.labels.squeeze()] if not self.invert_reweighting else data[self.labels.squeeze()]
+            reco_to_reweight = data[self.labels.squeeze()] if not self.invert_reweighting else data[~self.labels.squeeze()]
+            weights = self.weights[..., self.labels.squeeze()] if not self.invert_reweighting else self.weights[..., ~self.labels.squeeze()]
 
             if not self.bayesian:
-                emd_mean, emd_std = GetEMD(data_herwig, data_pythia, nboot=10, weights_arr=weights)
-                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_herwig, data_pythia, bins, nboot=10, weights=weights)
+                emd_mean, emd_std = GetEMD(reco_ref, reco_to_reweight, nboot=10, weights_arr=weights)
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(reco_ref, reco_to_reweight, bins, nboot=10, weights=weights)
             else:
-                emd_mean, emd_std = GetEMD(data_herwig, data_pythia, nboot=10, weights_arr=weights[0])
-                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_herwig, data_pythia, bins,
-                                                                                nboot=10, weights=weights[0])
+                emd_mean, emd_std = GetEMD(reco_ref, reco_to_reweight, nboot=10, weights_arr=weights[0])
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(reco_ref, reco_to_reweight, bins,
+                                                                              nboot=10, weights=weights[0])
 
             obs.reco_emd_mean = round(emd_mean, 4)
             obs.reco_emd_std = round(emd_std, 5)
@@ -1728,17 +1745,17 @@ class OmnifoldPlots(Plots):
     def compute_metrics_hard(self):
         for obs, bins, data in zip(self.observables, self.bins, self.obs_hard):
 
-            data_herwig = data[~self.labels.squeeze()]
-            data_pythia = data[self.labels.squeeze()]
-            weights = self.weights[..., self.labels.squeeze()]
+            hard_ref = data[~self.labels.squeeze()] if not self.invert_reweighting else data[self.labels.squeeze()]
+            hard_to_reweight = data[self.labels.squeeze()] if not self.invert_reweighting else data[~self.labels.squeeze()]
+            weights = self.weights[..., self.labels.squeeze()] if not self.invert_reweighting else self.weights[..., ~self.labels.squeeze()]
 
             if not self.bayesian:
-                emd_mean, emd_std = GetEMD(data_herwig, data_pythia, nboot=10, weights_arr=weights)
-                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_herwig, data_pythia, bins, nboot=10, weights=weights)
+                emd_mean, emd_std = GetEMD(hard_ref, hard_to_reweight, nboot=10, weights_arr=weights)
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(hard_ref, hard_to_reweight, bins, nboot=10, weights=weights)
             else:
-                emd_mean, emd_std = GetEMD(data_herwig, data_pythia, nboot=10, weights_arr=weights[0])
-                triangle_dist_mean, triangle_dist_std = get_triangle_distance(data_herwig, data_pythia, bins,
-                                                                                nboot=10, weights=weights[0])
+                emd_mean, emd_std = GetEMD(hard_ref, hard_to_reweight, nboot=10, weights_arr=weights[0])
+                triangle_dist_mean, triangle_dist_std = get_triangle_distance(hard_ref, hard_to_reweight, bins,
+                                                                              nboot=10, weights=weights[0])
 
             obs.hard_emd_mean = round(emd_mean, 4)
             obs.hard_emd_std = round(emd_std, 5)

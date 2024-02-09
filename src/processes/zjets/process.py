@@ -24,8 +24,17 @@ class ZJetsGenerative(Process):
         if subset in self.data:
             return
 
-        path = self.params["analysis_file" if subset == "analysis" else "training_file"]
-        data = np.load(path, allow_pickle=True)["arr_0"].item()
+        if self.params.get("high_statistics", True):
+            print("Loading high statistics file")
+            if subset == "analysis":
+                data = np.load(path, allow_pickle=True)["arr_0"].item()
+            else:
+                path = "data/OmniFold_Big.pkl"
+                with open(path, 'rb') as pickle_file:
+                    data = np.load(pickle_file, allow_pickle=True)
+        else:
+            path = self.params["analysis_file" if subset == "analysis" else "training_file"]
+            data = np.load(path, allow_pickle=True)["arr_0"].item()
 
         if self.params.get("loader", "theirs") == "ours":
             mask = ((data["sim_widths"] != 0) * (data["gen_widths"] != 0) * (data["sim_sdms"] > 0) * (data["gen_sdms"] > 0))

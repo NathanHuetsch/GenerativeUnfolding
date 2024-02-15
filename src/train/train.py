@@ -606,12 +606,6 @@ class Omnifold(Model):
         label_data = tuple(subset.label for subset in data)
         self.reco_pp.init_normalization(data[0].x_reco)
         reco_data = tuple(self.reco_pp(subset.x_reco) for subset in data)
-        if self.params["process_params"].get("add_noise", False) and self.params["process_params"].get("pythia_only", False):
-            mean = 0.
-            std = self.params["process_params"].get("noise_std", 5e-2)
-            print(f"Adding noise to Pythia 1 with mean {mean:.1f} and std {std:.1e}")
-            for i in range(len(reco_data)): # add noise to Pythia 1
-                reco_data[i][label_data[i].bool().squeeze(1)] += torch.randn_like(reco_data[i][label_data[i].bool().squeeze(1)]) * std + mean
         super(Omnifold, self).init_data_loaders(label_data, reco_data)
 
     def predict_probs(self, loader=None):

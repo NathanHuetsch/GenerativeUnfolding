@@ -27,6 +27,7 @@ class ZJetsGenerative(Process):
         if self.params.get("high_statistics", True):
             print("Loading high statistics file")
             if subset == "analysis":
+                path = self.params["analysis_file"]
                 data = np.load(path, allow_pickle=True)["arr_0"].item()
             else:
                 path = "data/OmniFold_Big.pkl"
@@ -246,6 +247,32 @@ class ZJetsOmnifold(ZJetsGenerative):
             label = torch.cat(label).to(torch.float32).to(self.device)
             x_hard = x_hard.to(torch.float32).to(self.device)
             x_reco = x_reco.to(torch.float32).to(self.device)
+
+
+            if self.params.get("add_noise", False):
+                scale = self.params.get("noise_std_factor", 1e-3)
+                print(f"Adding noise to Pythia 1 with factor {scale:.1e} * std")
+                
+                x_reco_std = torch.std(x_reco[label.bool().squeeze(1)], dim=0)
+                x_hard_std = torch.std(x_hard[label.bool().squeeze(1)], dim=0)
+                
+                debug = True
+                if debug:
+                    print("RECO means and stds before noise:", torch.mean(x_reco[label.bool().squeeze(1)], dim=0), x_reco_std)
+                    print("HARD means and stds before noise:", torch.mean(x_hard[label.bool().squeeze(1)], dim=0), x_hard_std)
+                    pass
+                
+                noise_reco = torch.randn_like(x_reco) * torch.std(x_reco, dim=0) * scale
+                x_reco[label.bool().squeeze(1)] += noise_reco[label.bool().squeeze(1)]
+                noise_hard = torch.randn_like(x_hard) * torch.std(x_hard, dim=0) * scale
+                x_hard[label.bool().squeeze(1)] += noise_hard[label.bool().squeeze(1)]
+
+                if debug:
+                    print("\nRECO means and stds after noise:", torch.mean(x_reco[label.bool().squeeze(1)], dim=0), torch.std(x_reco[label.bool().squeeze(1)], dim=0))
+                    print("HARD means and stds after noise:", torch.mean(x_hard[label.bool().squeeze(1)], dim=0), torch.std(x_hard[label.bool().squeeze(1)], dim=0))
+                    pass
+
+
         else:    
             label = [torch.ones((len(x_hard[0]), 1)), torch.zeros((len(x_hard[1]), 1))]
             label = torch.cat(label).to(torch.float32).to(self.device)

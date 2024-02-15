@@ -301,24 +301,26 @@ class Plots:
                             color=self.colors[3]
                         )
                     )
-                if not self.bayesian:
-                    metrics = [obs.metrics["full_emd_mean"],
-                               obs.metrics["full_emd_std"],
-                               obs.metrics["full_triangle_mean"],
-                               obs.metrics["full_triangle_std"],
-                               obs.metrics["single_emd_arrs"],
-                               obs.metrics["single_triangle_arrs"]]
-                else:
-                    metrics = [obs.metrics["MAP_full_emd_mean"],
-                               obs.metrics["MAP_full_emd_std"],
-                               obs.metrics["MAP_full_triangle_mean"],
-                               obs.metrics["MAP_full_triangle_std"],
-                               obs.metrics["MAP_single_emd_arrs"],
-                               obs.metrics["MAP_single_triangle_arrs"],
-                               obs.metrics["non_MAP_single_emd_arrs"],
-                               obs.metrics["non_MAP_single_triangle_arrs"]]
+                if self.show_metrics:
+                    if not self.bayesian:
+                        metrics = [obs.metrics["full_emd_mean"],
+                                obs.metrics["full_emd_std"],
+                                obs.metrics["full_triangle_mean"],
+                                obs.metrics["full_triangle_std"],
+                                obs.metrics["single_emd_arrs"],
+                                obs.metrics["single_triangle_arrs"]]
+                    else:
+                        metrics = [obs.metrics["MAP_full_emd_mean"],
+                                obs.metrics["MAP_full_emd_std"],
+                                obs.metrics["MAP_full_triangle_mean"],
+                                obs.metrics["MAP_full_triangle_std"],
+                                obs.metrics["MAP_single_emd_arrs"],
+                                obs.metrics["MAP_single_triangle_arrs"],
+                                obs.metrics["non_MAP_single_emd_arrs"],
+                                obs.metrics["non_MAP_single_triangle_arrs"]]
+                    pass
                     
-                self.hist_plot(pp, lines, bins, obs, metrics=metrics)
+                self.hist_plot(pp, lines, bins, obs, metrics=metrics if self.show_metrics else None)
                 if pickle_file is not None:
                     pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
 

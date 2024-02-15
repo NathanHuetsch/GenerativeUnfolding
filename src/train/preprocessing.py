@@ -33,7 +33,7 @@ class PreprocTrafo(nn.Module):
         rev: bool = False,
         batch_size: int = 100000,
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-        batch_size = len(x)
+        #batch_size = len(x)
         if rev and not self.invertible:
             raise ValueError("Tried to call inverse of non-invertible transformation")
         input_shape, output_shape = (

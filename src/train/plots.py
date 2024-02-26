@@ -1311,8 +1311,7 @@ class OmnifoldPlots(Plots):
         """
         self.observables = observables
         self.losses = losses
-        if invert_reweighting: print("Reweighting Pythia onto Herwig")
-        #labels = 1 - labels if invert_reweighting else labels
+        if invert_reweighting: print("Reweighting Herwig onto Pythia")
         self.labels = labels.cpu().bool().numpy()
         self.predictions = predictions.cpu().numpy() if not invert_reweighting else (1-predictions).cpu().numpy()
         self.weights = np.clip((1. - self.predictions)/self.predictions, 0., 200).squeeze()
@@ -1355,6 +1354,7 @@ class OmnifoldPlots(Plots):
         no_scale: bool = False,
         yscale: Optional[str] = None,
         show_metrics: bool = False,
+        ylim: tuple[float, float] = None,
     ):
         """
         Makes a single histogram plot for the weights
@@ -1422,6 +1422,8 @@ class OmnifoldPlots(Plots):
             axs[0].legend(frameon=False)
             axs[0].set_ylabel("normalized")
             axs[0].set_yscale("log" if yscale is None else yscale)
+            if ylim is not None:
+                axs[0].set_ylim(*ylim)
             if title is not None:
                 self.corner_text(axs[0], title, "left", "top")
 
@@ -1460,28 +1462,45 @@ class OmnifoldPlots(Plots):
                 binned_classes_test, _, _ = binned_statistic(data, self.labels.T, bins=bins) if not self.invert_reweighting else binned_statistic(data, ~self.labels.T, bins=bins)
                 if self.bayesian:
                     binned_classes_predict, _, _ = binned_statistic(data, self.predictions[0].T, bins=bins)
+                    binned_weights_predict, _, _ = binned_statistic(data[~self.labels.squeeze()], self.weights[0][~self.labels.squeeze()], bins=bins) # this is the mean of the weights for Pythia1/Herwig in each bin
+                    n_herwig, _, _ = binned_statistic(x = data[~self.labels.squeeze()], values =None, statistic = "count",  bins=bins)
+                    n_pythia, _, _ = binned_statistic(x = data[self.labels.squeeze()], values= None, statistic = "count",  bins=bins)
                 else:
                     binned_classes_predict, _, _ = binned_statistic(data, self.predictions.T, bins=bins)
+                    binned_weights_predict, _, _ = binned_statistic(data[~self.labels.squeeze()], self.weights[~self.labels.squeeze()].T, statistic = "mean", bins=bins) # this is the mean of the weights for Pythia1/Herwig in each bin
+                    n_herwig, _, _ = binned_statistic(x = data[~self.labels.squeeze()], values =None, statistic = "count",  bins=bins)
+                    n_pythia, _, _ = binned_statistic(x = data[self.labels.squeeze()], values= None, statistic = "count",  bins=bins)
                 bin_totals, _ = np.histogram(data, bins=bins)
                 y_true = np.stack(binned_classes_test, axis=1)
                 y_predict = np.stack(binned_classes_predict, axis=1)
                 y_true_err = np.sqrt(y_true * (1 - y_true) / bin_totals[:, None])
 
                 lines = []
-                for i in range(y_true.shape[-1]):
-                    lines.append(Line(
-                        y=y_true[:,i],
-                        y_err=y_true_err[:,i],
-                        color=self.colors[i],
-                        linestyle="dashed",
-                    ))
-                    lines.append(Line(
-                        y=y_predict[:,i],
-                        y_ref=y_true[:,i],
-                        label=f"{i} extra" if y_true.shape[-1] > 1 else "acceptance",
-                        color=self.colors[i],
-                    ))
-                self.hist_plot(pp, lines, bins, obs, no_scale=True, yscale="linear")
+                lines.append(Line(
+                    y=y_true[:,0],
+                    y_err=y_true_err[:,0],
+                    color=self.colors[0],
+                    linestyle="dashed",
+                ))
+                lines.append(Line(
+                    y=y_predict[:,0],
+                    y_ref=y_true[:,0],
+                    label="acceptance",
+                    color=self.colors[0],
+                ))
+                lines.append(Line(
+                    y=n_pythia / n_herwig,
+                    y_ref=None,
+                    color=self.colors[1],
+                    linestyle="dashed",
+                ))
+                lines.append(Line(
+                    y=binned_weights_predict,
+                    y_ref=n_pythia / n_herwig,
+                    label="mean weights",
+                    color=self.colors[1],
+                ))
+                self.hist_plot(pp, lines, bins, obs, no_scale=True, yscale="log")
 
     def plot_weights(self, file: str):
         """
@@ -1497,12 +1516,13 @@ class OmnifoldPlots(Plots):
                 weights_pythia = self.weights[self.labels.squeeze()]
                 weights_herwig = self.weights[~self.labels.squeeze()]
             
-            xlim_bins = [-1.5, 1.5]
+            xlim_bins = [-5, 5]
             bins = np.logspace(*xlim_bins, 128)
             y_pythia, y_pythia_err = self.compute_hist_data(bins, weights_pythia, bayesian=False)
             y_herwig, y_herwig_err = self.compute_hist_data(bins, weights_herwig, bayesian=False)
 
             original_bins = xlim_bins.copy()
+            '''
             while True and xlim_bins[0] < xlim_bins[1]:
                 bins = np.logspace(*xlim_bins, 128)
                 y_pythia, y_pythia_err = self.compute_hist_data(bins, weights_pythia, bayesian=False)
@@ -1515,7 +1535,7 @@ class OmnifoldPlots(Plots):
                     else:
                         xlim_bins[0] -= 0.01 * original_bins[0]
                         xlim_bins[1] -= 0.01 * original_bins[1]
-
+            '''
             lines = [
                         Line(
                             y=y_pythia,
@@ -1530,7 +1550,7 @@ class OmnifoldPlots(Plots):
                             color=self.colors[0],
                         ),
                     ]
-            self.hist_weights_plot(pp, lines, bins, show_ratios=False)
+            self.hist_weights_plot(pp, lines, bins, show_ratios=False, ylim=[1e-8, 2])
 
     def plot_reco(self, file: str, pickle_file: Optional[str] = None):
         """
@@ -1541,16 +1561,19 @@ class OmnifoldPlots(Plots):
         pickle_data = []
         with PdfPages(file) as pp:
             for obs, bins, data in zip(self.observables, self.bins, self.obs_reco):
-
                 data_pythia = data[self.labels.squeeze()]
                 data_herwig = data[~self.labels.squeeze()]
                 weights = self.weights[..., self.labels.squeeze()] if not self.invert_reweighting else self.weights[..., ~self.labels.squeeze()]
-                
+
+                if self.bayesian:
+                    weights_statistic, _, _ = binned_statistic(data, self.predictions[0].T, bins=bins) # this is the mean of the predicted predictions in each bin
+                else:
+                    weights_statistic, _, _ = binned_statistic(data, self.predictions.T, bins=bins) # this is the mean of the predicted predictions in each bin
+                weights_truth, _, _ = binned_statistic(data, ~self.labels.T, bins=bins) # this is the mean of the labels in each bin
 
                 y_pythia, y_pythia_err = self.compute_hist_data(bins, data_pythia, bayesian=False)
                 y_herwig, y_herwig_err = self.compute_hist_data(bins, data_herwig, bayesian=False)
                 y_reweight, y_reweight_err = self.compute_hist_data(bins, data_pythia, bayesian=self.bayesian, weights=weights) if not self.invert_reweighting else self.compute_hist_data(bins, data_herwig, bayesian=self.bayesian, weights=weights)
-
                 lines = [
                     Line(
                         y=y_pythia,
@@ -1572,11 +1595,20 @@ class OmnifoldPlots(Plots):
                         label="Omnifold" if not self.bayesian else "bOmnifold",
                         color=self.colors[1],
                     ),
+                    Line(
+                        y=y_herwig / weights_statistic[0] * (1- weights_statistic[0]),
+                        y_err=y_reweight_err,
+                        y_ref= y_pythia,
+                        label="LH ratio x Herwig",
+                        color=self.colors[4],
+                        linestyle="dashed"
+                    ),
                 ]
                 metrics = [obs.reco_emd_mean,
                            obs.reco_emd_std,
                            obs.reco_triangle_mean,
-                           obs.reco_triangle_std]
+                           obs.reco_triangle_std] if self.show_metrics else None
+                
                 self.hist_plot(pp, lines, bins, obs, metrics=metrics)
                 if pickle_file is not None:
                     pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
@@ -1627,7 +1659,7 @@ class OmnifoldPlots(Plots):
                 metrics = [obs.hard_emd_mean,
                            obs.hard_emd_std,
                            obs.hard_triangle_mean,
-                           obs.hard_triangle_std]
+                           obs.hard_triangle_std] if self.show_metrics else None
                 self.hist_plot(pp, lines, bins, obs, metrics=metrics)
                 if pickle_file is not None:
                     pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
@@ -1681,7 +1713,7 @@ class OmnifoldPlots(Plots):
                 metrics = [obs.emd_mean,
                            obs.emd_std,
                            obs.triangle_mean,
-                           obs.triangle_std]
+                           obs.triangle_std] if self.show_metrics else None
                 self.hist_plot(pp, lines, bins, obs, metrics=metrics)
 
                 if pickle_file is not None:

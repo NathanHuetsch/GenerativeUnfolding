@@ -81,6 +81,7 @@ def momenta_to_observables(
     n_bins: int = 50,
 ) -> list[Observable]:
     observables = []
+
     observables.append(
         Observable(
             compute=lambda p: return_obs(p[..., :], p[..., 0]),
@@ -92,6 +93,7 @@ def momenta_to_observables(
             yscale="linear",
         )
     )
+    
     observables.append(
         Observable(
             compute=lambda p: return_obs(p[..., :], p[..., 1]),
@@ -102,6 +104,7 @@ def momenta_to_observables(
             yscale="log",
         )
     )
+    
     observables.append(
         Observable(
             compute=lambda p: round(p[..., :], p[..., 2]),
@@ -144,4 +147,4 @@ def momenta_to_observables(
         )
     )
 
-    return observables
+    return observables #return [observables[i] for i in [0, 1, 2, 3, 4, 5]]

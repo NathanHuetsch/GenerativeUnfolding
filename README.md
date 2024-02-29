@@ -1,11 +1,12 @@
 <h2 align="center"> Generative Unfolding</h2>
 
-This a some code to do generative unfolding with INNs and CFMs.
+This is some code to do generative unfolding with INNs and CFMs. Distribution mapping is also possible with DirectDiffusion. Omnifold is implemented for reweighting-based unfolding.
+
 ## Installation
 
 ```sh
 # clone the repository
-git clone https://github.com/NathanHuetsch/GenerativeUnfolding
+git clone https://github.com/heidelberg-hepml/GenerativeUnfolding
 # then install in dev mode
 cd GenerativeUnfolding
 pip install --editable .

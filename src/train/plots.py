@@ -1462,12 +1462,12 @@ class OmnifoldPlots(Plots):
                 binned_classes_test, _, _ = binned_statistic(data, self.labels.T, bins=bins) if not self.invert_reweighting else binned_statistic(data, ~self.labels.T, bins=bins)
                 if self.bayesian:
                     binned_classes_predict, _, _ = binned_statistic(data, self.predictions[0].T, bins=bins)
-                    binned_weights_predict, _, _ = binned_statistic(data[~self.labels.squeeze()], self.weights[0][~self.labels.squeeze()], bins=bins) # this is the mean of the weights for Pythia1/Herwig in each bin
+                    binned_weights_predict, _, _ = binned_statistic(data[self.labels.squeeze()], self.weights[0][self.labels.squeeze()].T, statistic = "mean", bins=bins) if not self.invert_reweighting else binned_statistic(data[~self.labels.squeeze()], self.weights[0][~self.labels.squeeze()].T, statistic = "mean", bins=bins) # this is the mean of the weights for Pythia1/Herwig in each bin
                     n_herwig, _, _ = binned_statistic(x = data[~self.labels.squeeze()], values =None, statistic = "count",  bins=bins)
                     n_pythia, _, _ = binned_statistic(x = data[self.labels.squeeze()], values= None, statistic = "count",  bins=bins)
                 else:
                     binned_classes_predict, _, _ = binned_statistic(data, self.predictions.T, bins=bins)
-                    binned_weights_predict, _, _ = binned_statistic(data[~self.labels.squeeze()], self.weights[~self.labels.squeeze()].T, statistic = "mean", bins=bins) # this is the mean of the weights for Pythia1/Herwig in each bin
+                    binned_weights_predict, _, _ = binned_statistic(data[self.labels.squeeze()], self.weights[self.labels.squeeze()].T, statistic = "mean", bins=bins) if not self.invert_reweighting else binned_statistic(data[~self.labels.squeeze()], self.weights[~self.labels.squeeze()].T, statistic = "mean", bins=bins) # this is the mean of the weights for Pythia1/Herwig in each bin
                     n_herwig, _, _ = binned_statistic(x = data[~self.labels.squeeze()], values =None, statistic = "count",  bins=bins)
                     n_pythia, _, _ = binned_statistic(x = data[self.labels.squeeze()], values= None, statistic = "count",  bins=bins)
                 bin_totals, _ = np.histogram(data, bins=bins)
@@ -1489,14 +1489,14 @@ class OmnifoldPlots(Plots):
                     color=self.colors[0],
                 ))
                 lines.append(Line(
-                    y=n_pythia / n_herwig,
+                    y=n_pythia / n_herwig if self.invert_reweighting else n_herwig / n_pythia,
                     y_ref=None,
                     color=self.colors[1],
                     linestyle="dashed",
                 ))
                 lines.append(Line(
                     y=binned_weights_predict,
-                    y_ref=n_pythia / n_herwig,
+                    y_ref=n_pythia / n_herwig if self.invert_reweighting else n_herwig / n_pythia,
                     label="mean weights",
                     color=self.colors[1],
                 ))
@@ -1598,7 +1598,7 @@ class OmnifoldPlots(Plots):
                     Line(
                         y=y_herwig / weights_statistic[0] * (1- weights_statistic[0]),
                         y_err=y_reweight_err,
-                        y_ref= y_pythia,
+                        y_ref= y_herwig if not self.invert_reweighting else y_pythia,
                         label="LH ratio x Herwig",
                         color=self.colors[4],
                         linestyle="dashed"

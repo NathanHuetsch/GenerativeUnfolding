@@ -93,7 +93,6 @@ def momenta_to_observables(
             yscale="linear",
         )
     )
-    
     observables.append(
         Observable(
             compute=lambda p: return_obs(p[..., :], p[..., 1]),
@@ -104,7 +103,6 @@ def momenta_to_observables(
             yscale="log",
         )
     )
-    
     observables.append(
         Observable(
             compute=lambda p: round(p[..., :], p[..., 2]),

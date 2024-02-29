@@ -176,7 +176,6 @@ class ZJetsOmnifold(ZJetsGenerative):
 
         if self.params.get("pythia_only", False):
             print("\n Using only Pythia data - training on mapping reco (50%) onto reco (50%)\n")
-            print(len(x_hard), x_hard[0].shape)
             x_hard = torch.cat((x_hard[0], x_hard[2]), dim = 0)
             x_reco = torch.cat((x_reco[0], x_reco[2]), dim = 0)
 
@@ -226,74 +225,105 @@ class ZJetsOmnifold(ZJetsGenerative):
                         x_reco[data_slice],
                         label[data_slice]
                     )
-        else:    
-            train_max_len = min(len(x_hard[0]), len(x_hard[1])) # I want to make sure that the training set is balanced
-            x_hard_pythia_train = x_hard[0][:train_max_len]
-            x_hard_herwig_train = x_hard[1][:train_max_len]
-            x_reco_pythia_train = x_reco[0][:train_max_len]
-            x_reco_herwig_train = x_reco[1][:train_max_len]
-            
-            x_hard_herwig_test = x_hard[1][train_max_len:] # I also want to make sure that there is no overlap between the training and testing set
-            x_reco_herwig_test = x_reco[1][train_max_len:]
+        else:
+            if "Pythia26" not in self.params["training_file"]:
+                train_max_len = min(len(x_hard[0]), len(x_hard[1])) # I want to make sure that the training set is balanced
+                x_hard_pythia_train = x_hard[0][:train_max_len]
+                x_hard_herwig_train = x_hard[1][:train_max_len]
+                x_reco_pythia_train = x_reco[0][:train_max_len]
+                x_reco_herwig_train = x_reco[1][:train_max_len]
+                x_hard_herwig_test = x_hard[1][train_max_len:] # I also want to make sure that there is no overlap between the training and testing set
+                x_reco_herwig_test = x_reco[1][train_max_len:]
+                x_hard_pythia_test = x_hard[2][:len(x_hard_herwig_test)] # I also want to make sure that there is no overlap between the training and testing set
+                x_reco_pythia_test = x_reco[2][:len(x_hard_herwig_test)]
 
-            x_hard_pythia_test = x_hard[2][:len(x_hard_herwig_test)] # I also want to make sure that there is no overlap between the training and testing set
-            x_reco_pythia_test = x_reco[2][:len(x_hard_herwig_test)]
+                print(f"Using {train_max_len} events (each) for training Pythia vs. Herwig (before slicing)")
+                label_train = [torch.ones((len(x_hard_pythia_train), 1)), torch.zeros((len(x_hard_herwig_train), 1))]
+                label_train = torch.cat(label_train).to(torch.float32).to(self.device)
+                
+                label_test = [torch.zeros((len(x_hard_herwig_test), 1)), torch.ones((len(x_hard_pythia_test), 1))]
+                label_test = torch.cat(label_test).to(torch.float32).to(self.device)
+                
+                x_hard_train = torch.cat((x_hard_pythia_train, x_hard_herwig_train)).to(torch.float32).to(self.device)
+                x_reco_train = torch.cat((x_reco_pythia_train, x_reco_herwig_train)).to(torch.float32).to(self.device)
 
-            print(f"Using {train_max_len} events (each) for training Pythia vs. Herwig (before slicing)")
-            label_train = [torch.ones((len(x_hard_pythia_train), 1)), torch.zeros((len(x_hard_herwig_train), 1))]
-            label_train = torch.cat(label_train).to(torch.float32).to(self.device)
-            
-            label_test = [torch.zeros((len(x_hard_herwig_test), 1)), torch.ones((len(x_hard_pythia_test), 1))]
-            label_test = torch.cat(label_test).to(torch.float32).to(self.device)
-            
-            x_hard_train = torch.cat((x_hard_pythia_train, x_hard_herwig_train)).to(torch.float32).to(self.device)
-            x_reco_train = torch.cat((x_reco_pythia_train, x_reco_herwig_train)).to(torch.float32).to(self.device)
+                x_hard_test = torch.cat((x_hard_herwig_test, x_hard_pythia_test)).to(torch.float32).to(self.device)
+                x_reco_test = torch.cat((x_reco_herwig_test, x_reco_pythia_test)).to(torch.float32).to(self.device)
 
-            x_hard_test = torch.cat((x_hard_herwig_test, x_hard_pythia_test)).to(torch.float32).to(self.device)
-            x_reco_test = torch.cat((x_reco_herwig_test, x_reco_pythia_test)).to(torch.float32).to(self.device)
+                n_events = len(x_hard_train)
+                assert len(label_train) == n_events
+                assert len(x_reco_train) == n_events
+                n_events_test = len(x_hard_test)
+                assert len(label_test) == n_events_test
+                assert len(x_reco_test) == n_events_test
 
-            n_events = len(x_hard_train)
-            assert len(label_train) == n_events
-            assert len(x_reco_train) == n_events
-            n_events_test = len(x_hard_test)
-            assert len(label_test) == n_events_test
-            assert len(x_reco_test) == n_events_test
+                print(f"Using {len(x_hard_herwig_test)} (H) and {len(x_hard_pythia_test)} (P) for test (before slicing)")
+                
+                permutation_train = torch.as_tensor(rng.permutation(n_events))
+                x_hard_train = x_hard_train[permutation_train]
+                x_reco_train = x_reco_train[permutation_train]
+                label_train = label_train[permutation_train]
 
-            print(f"Using {len(x_hard_herwig_test)} (H) and {len(x_hard_pythia_test)} (P) for test (before slicing)")
-            
-            permutation_train = torch.as_tensor(rng.permutation(n_events))
-            permutation_test = torch.as_tensor(rng.permutation(n_events_test))
-
-            x_hard_train = x_hard_train[permutation_train]
-            x_reco_train = x_reco_train[permutation_train]
-            label_train = label_train[permutation_train]
-            print(f"Actual number of Pythia events in training set: {len(x_hard_train[0:1950000][label_train[0:1950000].bool().squeeze(1)])}")
-            print(f"Actual number of Herwig events in training set: {len(x_hard_train[0:1950000][~label_train[0:1950000].bool().squeeze(1)])}")
-
-            print(f"Actual number of Pythia events in val set: {len(x_hard_train[1950000:][label_train[1950000:].bool().squeeze(1)])}")
-            print(f"Actual number of Herwig events in val set: {len(x_hard_train[1950000:][~label_train[1950000:].bool().squeeze(1)])}")
-
-            print(f"Actual number of Pythia events in test set: {len(x_hard_test[label_test.bool().squeeze(1)])}")
-            print(f"Actual number of Herwig events in test set: {len(x_hard_test[~label_test.bool().squeeze(1)])}")
-            self.data["train"] = ProcessData(
-                        x_hard_train[0:1950000],#[:, [0, 1, 2, 3, 4, 5]],
-                        x_reco_train[0:1950000],#[:, [0, 1, 2, 3, 4, 5]],
-                        label_train[0:1950000]
-                    )
-            self.data["val"] = ProcessData(
-                        x_hard_train[1950000:],#[:, [0, 1, 2, 3, 4, 5]],
-                        x_reco_train[1950000:],#[:, [0, 1, 2, 3, 4, 5]],
-                        label_train[1950000:]
-                    )
-            test_slice = slice(int(n_events_test * self.params["test_slice"][0]), int(n_events_test * self.params["test_slice"][1]))
-            x_hard_test = x_hard_test[permutation_test]
-            x_reco_test = x_reco_test[permutation_test]
-            label_test = label_test[permutation_test]
-            self.data["test"] = ProcessData(
-                            x_hard_test[test_slice],#[:, [0, 1, 2, 3, 4, 5]],
-                            x_reco_test[test_slice],#[:, [0, 1, 2, 3, 4, 5]],
-                            label_test[test_slice]
+                train_slice = slice(int(n_events * self.params["train_slice"][0]), int(n_events * self.params["train_slice"][1]))
+                val_slice = slice(int(n_events * self.params["val_slice"][0]), int(n_events * self.params["val_slice"][1]))
+                test_slice = slice(int(n_events_test * self.params["test_slice"][0]), int(n_events_test * self.params["test_slice"][1]))
+                print(f"Actual number of Pythia events in training set: {len(x_hard_train[train_slice][label_train[train_slice].bool().squeeze(1)])}")
+                print(f"Actual number of Herwig events in training set: {len(x_hard_train[train_slice][~label_train[train_slice].bool().squeeze(1)])}")
+                print(f"Actual number of Pythia events in val set: {len(x_hard_train[val_slice][label_train[val_slice].bool().squeeze(1)])}")
+                print(f"Actual number of Herwig events in val set: {len(x_hard_train[val_slice][~label_train[val_slice].bool().squeeze(1)])}")
+                print(f"Actual number of Pythia events in test set: {len(x_hard_test[label_test.bool().squeeze(1)])}")
+                print(f"Actual number of Herwig events in test set: {len(x_hard_test[~label_test.bool().squeeze(1)])}")
+                
+                self.data["train"] = ProcessData(
+                            x_hard_train[train_slice],#[:, [0, 1, 2, 3, 4, 5]],
+                            x_reco_train[train_slice],#[:, [0, 1, 2, 3, 4, 5]],
+                            label_train[train_slice]
                         )
+                self.data["val"] = ProcessData(
+                            x_hard_train[val_slice],#[:, [0, 1, 2, 3, 4, 5]],
+                            x_reco_train[val_slice],#[:, [0, 1, 2, 3, 4, 5]],
+                            label_train[val_slice]
+                        )
+                
+                permutation_test = torch.as_tensor(rng.permutation(n_events_test))
+                x_hard_test = x_hard_test[permutation_test]
+                x_reco_test = x_reco_test[permutation_test]
+                label_test = label_test[permutation_test]
+                self.data["test"] = ProcessData(
+                                x_hard_test[test_slice],#[:, [0, 1, 2, 3, 4, 5]],
+                                x_reco_test[test_slice],#[:, [0, 1, 2, 3, 4, 5]],
+                                label_test[test_slice]
+                            )
+            else:
+                x_hard_pythia = x_hard[0]
+                x_reco_pythia = x_reco[0]
+                x_hard_herwig = x_hard[1]
+                x_reco_herwig = x_reco[1]
+
+                label = [torch.ones((len(x_hard_pythia), 1)), torch.zeros((len(x_hard_herwig), 1))]
+                label = torch.cat(label).to(torch.float32).to(self.device)
+                
+                x_hard = torch.cat((x_hard_pythia, x_hard_herwig)).to(torch.float32).to(self.device)
+                x_reco = torch.cat((x_reco_pythia, x_reco_herwig)).to(torch.float32).to(self.device)
+
+                n_events = len(x_hard)
+                assert len(label) == n_events
+                assert len(x_reco) == n_events
+
+                permutation = torch.as_tensor(rng.permutation(n_events))
+
+                x_hard = x_hard[permutation]
+                x_reco = x_reco[permutation]
+                label = label[permutation]
+                for subs in ["train", "val", "test"]:
+                    low, high = self.params[f"{subs}_slice"]
+                    print(f"{subs}_slice: {low} - {high}")
+                    data_slice = slice(int(n_events * low), int(n_events * high))
+                    self.data[subs] = ProcessData(
+                        x_hard[data_slice],
+                        x_reco[data_slice],
+                        label[data_slice]
+                    )
 
 
     def get_data(self, subset: str) -> ProcessData:

@@ -5,6 +5,7 @@ import time
 from datetime import timedelta
 import os
 import torch
+import numpy as np
 from ema_pytorch import EMA
 from ..models.inn import INN
 from ..models.transfermer import Transfermer
@@ -255,17 +256,47 @@ class Model:
             Dictionary with loss terms averaged over all samples
         """
         self.model.eval()
-        n_total = 0
-        total_losses = defaultdict(list)
-        with torch.no_grad():
-            for xs, cs in self.progress(loader, desc="  Batch", leave=False):
-                n_samples = xs.shape[0]
-                n_total += n_samples
-                _, losses = self.model.batch_loss(
-                    xs, cs, kl_scale=1 / self.n_train_samples
-                )
-                for name, loss in losses.items():
-                    total_losses[name].append(loss * n_samples)
+        if self.model.bayesian:
+            for layer in self.model.bayesian_layers:
+                layer.map = True
+            n_total = 0
+            total_losses = defaultdict(list)
+            with torch.no_grad():
+                for xs, cs in self.progress(loader, desc="  Batch", leave=False):
+                    n_samples = xs.shape[0]
+                    n_total += n_samples
+                    _, losses = self.model.batch_loss(
+                        xs, cs, kl_scale=1 / self.n_train_samples
+                    )
+                    for name, loss in losses.items():
+                        name = 'MAP_' + name
+                        total_losses[name].append(loss * n_samples)
+
+                for layer in self.model.bayesian_layers:
+                    layer.map = False
+                self.model.reset_random_state()
+
+                n_total = 0
+                for xs, cs in self.progress(loader, desc="  Batch", leave=False):
+                    n_samples = xs.shape[0]
+                    n_total += n_samples
+                    _, losses = self.model.batch_loss(
+                        xs, cs, kl_scale=1 / self.n_train_samples
+                    )
+                    for name, loss in losses.items():
+                        total_losses[name].append(loss * n_samples)
+        else:
+            n_total = 0
+            total_losses = defaultdict(list)
+            with torch.no_grad():
+                for xs, cs in self.progress(loader, desc="  Batch", leave=False):
+                    n_samples = xs.shape[0]
+                    n_total += n_samples
+                    _, losses = self.model.batch_loss(
+                        xs, cs, kl_scale=1 / self.n_train_samples
+                    )
+                    for name, loss in losses.items():
+                        total_losses[name].append(loss * n_samples)
         return {name: sum(losses) / n_total for name, losses in total_losses.items()}
 
     def predict(self, loader=None) -> torch.Tensor:
@@ -381,15 +412,17 @@ class Model:
             loader = self.test_loader
         self.model.eval()
         #bayesian_samples = self.params.get("bayesian_samples", 20) if self.model.bayesian else 1
-        bayesian_samples = 2 if self.model.bayesian else 1
-        max_batches = min(len(loader), self.params.get("max_dist_batches", 2))
+        bayesian_samples = 1 if self.model.bayesian else 1
+        max_batches = min(len(loader), self.params.get("max_dist_batches", 1))
         samples_per_event = self.params.get("dist_samples_per_event", 5)
         with torch.no_grad():
             all_samples = []
-            for j in range(bayesian_samples):
+            for j in range(1):
                 offset = j * max_batches * samples_per_event
                 if self.model.bayesian:
-                    self.model.reset_random_state()
+                    for layer in self.model.bayesian_layers:
+                            layer.map = True
+
                 for i, (xs, cs) in enumerate(loader):
                     if i == max_batches:
                         break
@@ -417,6 +450,462 @@ class Model:
                 )
             else:
                 return all_samples
+    
+    def train_classifier(self,
+                         doc: Documenter,
+                         raw_data: torch.Tensor,
+                         raw_gen_single: torch.Tensor,
+                         raw_gen_dist: torch.Tensor,
+                         permutation: torch.Tensor) -> torch.Tensor:
+        """
+        Train a classifier
+        """
+        print("------- Running classifier training -------")
+        raw_gen_single = raw_gen_single[0] if self.model.bayesian else raw_gen_single
+        raw_gen_single[:, 2] = torch.round(raw_gen_single[:, 2]) # round jet multiplicity
+        n_events = len(raw_data.x_hard)
+        
+        use_cuda = torch.cuda.is_available()
+        print("Using device " + ("GPU" if use_cuda else "CPU"))
+        device = torch.device("cuda:0" if use_cuda else "cpu")
+        
+        label = [torch.ones((len(raw_data.x_hard), 1)), torch.zeros((len(raw_gen_single), 1))]
+        label = torch.cat(label).to(torch.float32).to(self.device)
+        x_hard = torch.cat((raw_data.x_hard, raw_gen_single)).to(torch.float32).to(self.device)
+                
+        n_events = len(x_hard)
+        assert len(label) == n_events
+        assert n_events == len(permutation)
+
+        
+        x_hard = x_hard[permutation]
+        label = label[permutation]
+        # Load data
+        data_train = {}
+        data_val = {}
+        data_test = {}
+        classifier_params = self.params["classifier_params"]
+        process_params = classifier_params["process_params"]
+
+        trlow, trhigh = process_params["train_slice"]
+        valow, vahigh = process_params["val_slice"]
+        telow, tehigh = process_params["test_slice"]
+
+        tr_data_slice = slice(int(n_events * trlow), int(n_events * trhigh))
+        va_data_slice = slice(int(n_events * valow), int(n_events * vahigh))
+        te_data_slice = slice(int(n_events * telow), int(n_events * tehigh))
+
+        for name, var in zip(["x_hard", "label"], [x_hard, label]):
+            data_train[name] = var[tr_data_slice]
+            data_val[name] = var[va_data_slice]
+            data_test[name] = var[te_data_slice]                              
+
+        # Init model
+        dims_in = data_train["label"].shape[1]
+        dims_c = data_train["x_hard"].shape[1]
+        classifier_params["dims_in"] = dims_in
+        classifier_params["dims_c"] = dims_c
+        print(f"    Train events: {len(data_train['x_hard'])}")
+        print(f"    Val events: {len(data_val['x_hard'])}")
+        print(f"    Test events: {len(data_test['x_hard'])}")
+        print(f"    Hard dimension: {dims_c}")
+        print(f"    Label dimension: {dims_in}")
+        classifier_path = doc.get_file("classifier", False)
+        os.makedirs(classifier_path, exist_ok=True)
+        print("------- Building classifier -------")
+        classifier = Classifier(classifier_params).to(device)
+
+        # init dataloaders
+        input_train, input_val, input_test = data_train["label"], data_val["label"], data_test["label"]
+        cond_train, cond_val, cond_test = data_train["x_hard"], data_val["x_hard"], data_test["x_hard"]
+        n_train_samples = len(input_train)
+        n_val_samples = len(input_val)
+        bs = classifier_params.get("batch_size")
+        bs_sample = classifier_params.get("batch_size_sample", bs)
+        train_loader_kwargs = {"shuffle": True, "batch_size": bs, "drop_last": False}
+        val_loader_kwargs = {"shuffle": False, "batch_size": bs_sample, "drop_last": False}
+
+        train_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_train.float(), cond_train.float()),
+            **train_loader_kwargs,
+        )
+        val_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(input_val.float(), cond_val.float()),
+            **val_loader_kwargs,
+        )
+
+
+        # init Optimizer
+        optim = {
+            "adam": torch.optim.Adam,
+            "radam": torch.optim.RAdam,
+        }[self.params.get("optimizer", "adam")]
+        optimizer = optim(
+            classifier.parameters(),
+            lr=classifier_params.get("lr", 0.0002),
+            betas=classifier_params.get("betas", [0.9, 0.999]),
+            eps=classifier_params.get("eps", 1e-6),
+            weight_decay=classifier_params.get("weight_decay", 0.0),
+        )
+
+        lr_sched_mode = classifier_params.get("lr_scheduler", None)
+        if lr_sched_mode == "step":
+            scheduler = torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=classifier_params["lr_decay_epochs"],
+                gamma=classifier_params["lr_decay_factor"],
+            )
+        elif lr_sched_mode == "one_cycle":
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                classifier_params.get("max_lr", classifier_params["lr"] * 10),
+                epochs=classifier_params["epochs"],
+                steps_per_epoch=len(train_loader),
+            )
+        elif lr_sched_mode == "cosine_annealing":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer=optimizer,
+                T_max= classifier_params["epochs"] * len(train_loader)
+            )
+        else:
+            scheduler = None
+
+
+        # Training loop
+        best_val_loss = 1e20
+        checkpoint_interval = classifier_params.get("checkpoint_interval")
+        checkpoint_overwrite = self.params.get("checkpoint_overwrite", True)
+        use_ema = False
+
+        state_dict_attrs = ['model']
+        cl_losses = defaultdict(list)
+
+        start_time = time.time()
+        for epoch in self.progress(
+            range(classifier_params["epochs"]), desc="  Epoch", leave=False, position=0
+        ):
+            # Train
+            #self.begin_epoch()
+            classifier.train()
+            epoch_train_losses = defaultdict(int)
+            loss_scale = 1 / len(train_loader)
+            for xs, cs in self.progress(
+                train_loader, desc="  Batch", leave=False, position=1
+            ):
+                optimizer.zero_grad()
+                loss, loss_terms = classifier.batch_loss(
+                    xs, cs, 1 / n_train_samples
+                )
+                loss.backward()
+                optimizer.step()
+                if lr_sched_mode == "one_cycle" or lr_sched_mode == "cosine_annealing":
+                    scheduler.step()
+                for name, loss in loss_terms.items():
+                    epoch_train_losses[name] += loss * loss_scale
+                if use_ema:
+                    classifier.ema.update()
+            if lr_sched_mode == "step":
+                scheduler.step()
+
+            for name, loss in epoch_train_losses.items():
+                cl_losses[f"tr_{name}"].append(loss)
+
+            # Evaluate
+            classifier.eval()
+            if classifier.bayesian:
+                for layer in classifier.bayesian_layers:
+                    layer.map = True
+                n_total = 0
+                total_losses = defaultdict(list)
+                with torch.no_grad():
+                    for xs, cs in self.progress(val_loader, desc="  Batch", leave=False):
+                        n_samples = xs.shape[0]
+                        n_total += n_samples
+                        _, losses = classifier.batch_loss(
+                            xs, cs, kl_scale=1 / n_train_samples
+                        )
+                        for name, loss in losses.items():
+                            name = 'MAP_' + name
+                            total_losses[name].append(loss * n_samples)
+
+                    for layer in classifier.bayesian_layers:
+                        layer.map = False
+                    classifier.reset_random_state()
+
+                    n_total = 0
+                    for xs, cs in self.progress(val_loader, desc="  Batch", leave=False):
+                        n_samples = xs.shape[0]
+                        n_total += n_samples
+                        _, losses = classifier.batch_loss(
+                            xs, cs, kl_scale=1 / n_train_samples
+                        )
+                        for name, loss in losses.items():
+                            total_losses[name].append(loss * n_samples)
+            else:
+                n_total = 0
+                total_losses = defaultdict(list)
+                with torch.no_grad():
+                    for xs, cs in self.progress(val_loader, desc="  Batch", leave=False):
+                        n_samples = xs.shape[0]
+                        n_total += n_samples
+                        _, losses = classifier.batch_loss(
+                            xs, cs, kl_scale=1 / n_train_samples
+                        )
+                        for name, loss in losses.items():
+                            total_losses[name].append(loss * n_samples)
+            cl_dataset_loss =  {name: sum(losses) / n_total for name, losses in total_losses.items()}
+            
+            for name, loss in cl_dataset_loss.items():
+                cl_losses[f"val_{name}"].append(loss)
+            if epoch < 20:
+                last_20_val_losses = cl_losses["val_loss"]
+            else:
+                last_20_val_losses = cl_losses["val_loss"][-20:]
+            cl_losses["val_movAvg"].append(torch.tensor(last_20_val_losses).mean().item())
+
+            cl_losses["lr"].append(optimizer.param_groups[0]["lr"])
+
+    
+            if cl_losses["val_loss"][-1] < best_val_loss:
+                best_val_loss = cl_losses["val_loss"][-1]
+                torch.save(
+                    {
+                        **{
+                        attr: getattr(classifier, attr).state_dict()
+                        for attr in state_dict_attrs
+                        },
+                        "losses": cl_losses
+                    },
+                    classifier_path + "/best.pth",
+                )
+            if (
+                checkpoint_interval is not None
+                and (epoch + 1) % checkpoint_interval == 0
+            ):
+                
+                torch.save(
+                    {
+                        **{
+                        attr: getattr(classifier, attr).state_dict()
+                        for attr in state_dict_attrs
+                        },
+                        "losses": cl_losses
+                    },
+                    classifier_path + "/final.pth" if checkpoint_overwrite else classifier_path + "/epoch_{epoch}.pth"
+                )
+
+            self.print(
+                f"    Ep {epoch}: "
+                + ", ".join(
+                    [
+                        f"{name} = {loss[-1]:{'.2e' if name == 'lr' else '.5f'}}"
+                        for name, loss in cl_losses.items()
+                    ]
+                )
+                + f", t = {timedelta(seconds=round(time.time() - start_time))}"
+            )
+
+        torch.save(
+            {
+                **{
+                    attr: getattr(classifier, attr).state_dict()
+                    for attr in state_dict_attrs
+                },
+                "losses": cl_losses
+            },
+            classifier_path + "/final.pth",
+        )
+        print(classifier)
+        time_diff = timedelta(seconds=round(time.time() - start_time))
+        print(f"    Classifier training completed after {time_diff}")
+
+    def eval_classifier(self,
+                         doc: Documenter,
+                         raw_data: torch.Tensor,
+                         raw_gen_single: torch.Tensor,
+                         raw_gen_dist: torch.Tensor,
+                         permutation: torch.Tensor,
+                         data: str = "test",
+                         model_name: str = "final",
+                         name: str = "") -> torch.Tensor:
+        """
+        Evaluate the classifier
+        """
+        print("------- Running classifier evaluation -------")
+        print(f"Checkpoint: {model_name},  Data: {data}")
+        raw_gen_single = raw_gen_single[0] if self.model.bayesian else raw_gen_single
+        raw_gen_single[:, 2] = torch.round(raw_gen_single[:, 2]) # round jet multiplicity
+        n_events = len(raw_data.x_hard)
+        
+        use_cuda = torch.cuda.is_available()
+        print("Using device " + ("GPU" if use_cuda else "CPU"))
+        device = torch.device("cuda:0" if use_cuda else "cpu")
+        
+        label = [torch.ones((len(raw_data.x_hard), 1)), torch.zeros((len(raw_gen_single), 1))]
+        label = torch.cat(label).to(torch.float32).to(device)
+        x_hard = torch.cat((raw_data.x_hard, raw_gen_single)).to(torch.float32).to(device)
+                
+        n_events = len(x_hard)
+        assert len(label) == n_events
+        
+        x_hard = x_hard[permutation]
+        label = label[permutation]
+        # Load data
+        data_train = {}
+        data_val = {}
+        data_test = {}
+        classifier_params = self.params["classifier_params"]
+        process_params = classifier_params["process_params"]
+        state_dict_attrs = ['model']
+
+        trlow, trhigh = process_params["train_slice"]
+        valow, vahigh = process_params["val_slice"]
+        telow, tehigh = process_params["test_slice"]
+
+        tr_data_slice = slice(int(n_events * trlow), int(n_events * trhigh))
+        va_data_slice = slice(int(n_events * valow), int(n_events * vahigh))
+        te_data_slice = slice(int(n_events * telow), int(n_events * tehigh))
+
+        for name, var in zip(["x_hard", "label"], [x_hard, label]):
+            data_train[name] = var[tr_data_slice]
+            data_val[name] = var[va_data_slice]
+            data_test[name] = var[te_data_slice]                             
+
+        if data == "test":
+            dims_in = data_test["label"].shape[1]
+            dims_c = data_test["x_hard"].shape[1]
+        elif data == "train":
+            dims_in = data_train["label"].shape[1]
+            dims_c = data_train["x_hard"].shape[1]
+        else:
+            pass
+        classifier_params["dims_in"] = dims_in
+        classifier_params["dims_c"] = dims_c
+
+        # init dataloaders
+        input_train, input_val, input_test = data_train["label"], data_val["label"], data_test["label"]
+        cond_train, cond_val, cond_test = data_train["x_hard"], data_val["x_hard"], data_test["x_hard"]
+        n_train_samples = len(input_train)
+        n_val_samples = len(input_val)
+        bs = classifier_params.get("batch_size")
+        bs_sample = classifier_params.get("batch_size_sample", bs)
+        train_loader_kwargs = {"shuffle": False, "batch_size": 10 * bs, "drop_last": False}
+        val_loader_kwargs = {"shuffle": False, "batch_size": bs_sample, "drop_last": False}
+
+        if data == "test":
+            loader = torch.utils.data.DataLoader(
+                torch.utils.data.TensorDataset(input_test.float(),
+                                               cond_test.float()),
+                                               **val_loader_kwargs
+                                               )
+        elif data == "train":
+            loader = torch.utils.data.DataLoader(
+                torch.utils.data.TensorDataset(input_train.float(),
+                                               cond_train.float()),
+                                               **train_loader_kwargs,
+                                               )
+        classifier = Classifier(classifier_params).to(device)
+        try:
+            state_dict = torch.load(doc.get_file(f"classifier/{model_name}.pth", False), map_location=device)
+            for attr in state_dict_attrs:
+                try:
+                    getattr(classifier, attr).load_state_dict(state_dict[attr])
+                    print(f"    Loaded {attr}")
+                except AttributeError:
+                    print(f"    Could not load {attr}")
+                    pass
+            self.cl_losses = state_dict["losses"]
+        except FileNotFoundError:
+            raise FileNotFoundError("Classifier model not found")
+        
+        print(f"    Predicting weights")
+        t0 = time.time()
+        # predict probabilities
+        classifier.eval()
+
+        if loader is None:
+            raise ValueError("No data loader provided")
+
+        bayesian_samples = classifier_params.get("bayesian_samples", 20) if classifier.bayesian else 1
+        with torch.no_grad():
+            all_samples = []
+            for i in range(bayesian_samples):
+                if classifier.bayesian:
+                    if i == 0:
+                        for layer in classifier.bayesian_layers:
+                            layer.map = True
+                    else:
+                        for layer in classifier.bayesian_layers:
+                            layer.map = False
+                        classifier.reset_random_state()
+                predictions = []
+                t0 = time.time()
+                for xs, cs in self.progress(loader, desc="  Predicting", leave=False):
+                    predictions.append(classifier.probs(cs))
+                all_samples.append(torch.cat(predictions, dim=0))
+                if classifier.bayesian:
+                    print(f"    Finished bayesian sample {i} in {time.time() - t0}", flush=True)
+            all_samples = torch.cat(all_samples, dim=0)
+        if classifier.bayesian:
+            predictions = all_samples.reshape(
+                bayesian_samples,
+                len(all_samples) // bayesian_samples,
+                *all_samples.shape[1:],
+            )
+        else:
+            predictions = all_samples
+        t1 = time.time()
+        time_diff = timedelta(seconds=round(t1 - t0))
+        print(f"    Predictions completed after {time_diff}")
+
+        if classifier_params.get("compute_test_loss", False):
+            print(f"    Computing {data} loss")
+            # Evaluate
+            classifier.eval()
+            if classifier.bayesian:
+                for layer in classifier.bayesian_layers:
+                    layer.map = True
+                n_total = 0
+                total_losses = defaultdict(list)
+                with torch.no_grad():
+                    for xs, cs in self.progress(loader, desc="  Batch", leave=False):
+                        n_samples = xs.shape[0]
+                        n_total += n_samples
+                        _, losses = classifier.batch_loss(
+                            xs, cs, kl_scale=1 / n_train_samples
+                        )
+                        for name, loss in losses.items():
+                            name = 'MAP_' + name
+                            total_losses[name].append(loss * n_samples)
+
+                    for layer in classifier.bayesian_layers:
+                        layer.map = False
+                    classifier.reset_random_state()
+
+                    n_total = 0
+                    for xs, cs in self.progress(loader, desc="  Batch", leave=False):
+                        n_samples = xs.shape[0]
+                        n_total += n_samples
+                        _, losses = classifier.batch_loss(
+                            xs, cs, kl_scale=1 / n_train_samples
+                        )
+                        for name, loss in losses.items():
+                            total_losses[name].append(loss * n_samples)
+            else:
+                n_total = 0
+                total_losses = defaultdict(list)
+                with torch.no_grad():
+                    for xs, cs in self.progress(loader, desc="  Batch", leave=False):
+                        n_samples = xs.shape[0]
+                        n_total += n_samples
+                        _, losses = classifier.batch_loss(
+                            xs, cs, kl_scale=1 / n_train_samples
+                        )
+                        for name, loss in losses.items():
+                            total_losses[name].append(loss * n_samples)
+            cl_dataset_loss =  {name: sum(losses) / n_total for name, losses in total_losses.items()}
+            print(f"    Result: {cl_dataset_loss['loss']:.4f}")
+        return predictions, cond_test, input_test
 
     def save(self, name: str):
         """

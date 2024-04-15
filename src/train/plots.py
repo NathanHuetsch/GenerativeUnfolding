@@ -8,9 +8,11 @@ import matplotlib as mpl
 from matplotlib.backends.backend_pdf import PdfPages
 import torch
 from .utils import GetEMD, get_triangle_distance, get_normalisation_weight
+
 from ..processes.observables import Observable
 import yaml
 from scipy.stats import binned_statistic
+import sklearn.metrics as metrics
 
 
 @dataclass
@@ -35,6 +37,7 @@ class Plots:
         self,
         observables: list[Observable],
         losses: dict,
+        cl_losses: Optional[dict],
         x_hard: torch.Tensor,
         x_reco: torch.Tensor,
         x_gen_single: torch.Tensor,
@@ -47,6 +50,9 @@ class Plots:
         plot_metrics: bool = False,
         n_unfoldings: int = 1,
         bayesian_samples: int = 1,
+        eval_classifier_preds: Optional[torch.Tensor] = None,
+        cl_gen_test: Optional[torch.Tensor] = None,
+        cl_label_test: Optional[torch.Tensor] = None,
         debug: bool = False,
     ):
         """
@@ -63,9 +69,11 @@ class Plots:
         """
         self.observables = observables
         self.losses = losses
-
+        self.cl_losses = cl_losses
         self.compare = x_compare is not None
 
+        self.x_hard = x_hard
+        self.x_reco = x_reco
         self.x_hard_pp = x_hard_pp
         self.x_reco_pp = x_reco_pp
 
@@ -103,6 +111,9 @@ class Plots:
         self.plot_metrics = plot_metrics
         self.n_unfoldings = n_unfoldings
         self.bayesian_samples = bayesian_samples
+        self.eval_classifier_preds = eval_classifier_preds.cpu().numpy() if eval_classifier_preds is not None else None
+        self.cl_gen_test = cl_gen_test.cpu().numpy() if cl_gen_test is not None else None
+        self.cl_label_test = cl_label_test.cpu().bool().numpy() if cl_label_test is not None else None
         self.debug = debug
         if self.show_metrics:
             print(f"    Computing metrics")
@@ -113,19 +124,20 @@ class Plots:
         plt.rc("text.latex", preamble=r"\usepackage{amsmath}")
         plt.rc("text", usetex=True)
 
-    def plot_losses(self, file: str):
+    def plot_losses(self, file: str, cl_loss: bool = False):
         """
         Makes plots of the losses (total loss and if bayesian, BCE loss and KL loss
         separately) and learning rate as a function of the epoch.
         Args:
             file: Output file name
         """
+        losses = self.losses if not cl_loss else self.cl_losses if self.cl_losses is not None else None
         with PdfPages(file) as pp:
             loss_counter = 0
             self.plot_single_loss(
                 pp,
                 "loss",
-                (self.losses["tr_loss"], self.losses["val_loss"]),
+                (losses["tr_loss"], losses["val_loss"]),
                 ("train", "val"),
             )
             loss_counter += 2
@@ -137,7 +149,7 @@ class Plots:
             lr_bool = False
             movAvg_bool = False
 
-            for l in self.losses:
+            for l in losses:
                 if 'bce' in l:
                     bce_bool = True
                 elif 'mse' in l:
@@ -157,7 +169,7 @@ class Plots:
                 self.plot_single_loss(
                     pp,
                     "BCE loss",
-                    (self.losses["tr_bce"], self.losses["val_bce"]),
+                    (losses["tr_bce"], losses["val_bce"]),
                     ("train", "val"),
                 )
                 loss_counter += 2
@@ -165,7 +177,7 @@ class Plots:
                 self.plot_single_loss(
                     pp,
                     "MSE loss",
-                    (self.losses["tr_mse"], self.losses["val_mse"]),
+                    (losses["tr_mse"], losses["val_mse"]),
                     ("train", "val"),
                 )
                 loss_counter += 2
@@ -173,7 +185,7 @@ class Plots:
                 self.plot_single_loss(
                     pp,
                     "KL loss",
-                    (self.losses["tr_kl"], self.losses["val_kl"]),
+                    (losses["tr_kl"], losses["val_kl"]),
                     ("train", "val"),
                 )
                 loss_counter += 2
@@ -181,24 +193,24 @@ class Plots:
                 self.plot_single_loss(
                     pp,
                     "NLL loss",
-                    (self.losses["tr_nll"], self.losses["val_nll"]),
+                    (losses["tr_nll"], losses["val_nll"]),
                     ("train", "val"),
                 )
                 loss_counter += 2
             if lr_bool:
                 self.plot_single_loss(
-                    pp, "learning rate", (self.losses["lr"],), (None,), "log"
+                    pp, "learning rate", (losses["lr"],), (None,), "log"
                 )
                 loss_counter += 1
             if movAvg_bool:
                 self.plot_single_loss(
-                    pp, "mov. Avg.", (self.losses["movAvg"], self.losses["val_movAvg"]), ("train", "val",), "log"
+                    pp, "mov. Avg.", (losses["movAvg"], losses["val_movAvg"]), ("train", "val",), "log"
                 )
                 loss_counter += 2
         
-        if loss_counter < len(self.losses):
-            print(f"Not all ({len(self.losses)}) losses being plotted ({loss_counter})")
-            print("Losses:", [l for l in self.losses])
+        if loss_counter < len(losses):
+            print(f"Not all ({len(losses)}) losses being plotted ({loss_counter})")
+            print("Losses:", [l for l in losses])
 
 
     def plot_single_loss(
@@ -238,15 +250,24 @@ class Plots:
         """
         pickle_data = []
         with PdfPages(file) as pp:
-            for obs, bins, data_hard, data_reco, data_gen, data_compare in zip(
-                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_single, self.obs_compare
+            for obs, bins, data_hard, data_reco, data_gen, data_compare, data_gen_classifier in zip(
+                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_single, self.obs_compare, self.cl_gen_test.T
             ):
-
+                print(obs)
 
                 y_hard, y_hard_err = self.compute_hist_data(bins, data_hard, bayesian=False)
                 y_reco, y_reco_err = self.compute_hist_data(bins, data_reco, bayesian=False)
                 y_gen, y_gen_err = self.compute_hist_data(bins, data_gen[0], bayesian=False) # if it is not bayesian the MAP0 is just the first unfolding
                 
+                if self.eval_classifier_preds is not None:
+                    #print(data_gen_classifier.shape)
+                    #print(self.eval_classifier_preds.shape)
+                    binned_classes_predict, _, _ = binned_statistic(data_gen_classifier.T, self.eval_classifier_preds[:, 0], bins = bins)
+                    #print(binned_classes_predict.shape)
+                    #y_predict = np.stack(binned_classes_predict)
+                    weights = np.clip(self.eval_classifier_preds[~self.cl_label_test] / (1-self.eval_classifier_preds[~self.cl_label_test]), 0., 200.)
+                    y_rew, y_rew_err = self.compute_hist_data(bins, data_gen_classifier[~self.cl_label_test[..., 0]], bayesian=False, weights=weights)#self.eval_classifier_preds[:, 0])
+                    #print(y_predict.shape)
                 lines = [
                     Line(
                         y=y_reco,
@@ -268,6 +289,7 @@ class Plots:
                         color=self.colors[1],
                     ),
                 ]
+
                 data_n = data_gen.shape[-1]
                 data_MAP = data_gen[:self.n_unfoldings].reshape(-1)
 
@@ -290,6 +312,23 @@ class Plots:
                         color=self.colors[4],
                     )
                 )
+                if self.eval_classifier_preds is not None:
+                    #lines.append(
+                        #Line(
+                        #    y=y_predict,
+                        #    label=r"$C(x_{\text{hard}})$",
+                        #    color=self.colors[3],
+                        #))
+                    lines.append(
+                        Line(
+                            y=y_rew,
+                            y_err=y_rew_err,
+                            y_ref=y_hard,
+                            label=r"$\omega_{C}(x)\times \text{Unfold}$",
+                            color="black",
+                            linestyle="dashed"
+                        )
+                    )
                 if self.compare:
                     y_comp, y_comp_err = self.compute_hist_data(bins, data_compare, bayesian=False)
                     lines.append(
@@ -328,14 +367,14 @@ class Plots:
             with open(pickle_file, "wb") as f:
                 pickle.dump(pickle_data, f)
 
-    def plot_calibration(self, file: str):
+    def plot_calibration(self, file: str, pickle_file: Optional[str] = None):
         """
         Makes calibration plots for all observables.
 
         Args:
             file: Output file name
         """
-
+        pickle_data = []
         with PdfPages(file) as pp:
             for obs, data_true, data_gen in zip(
                 self.observables, self.obs_hard, self.obs_gen_dist
@@ -359,7 +398,7 @@ class Plots:
                         calibration_x,
                         calibration_y,
                         color=self.colors[0],
-                        alpha=0.3 if self.bayesian else 1,
+                        alpha=0.8 if self.bayesian else 1,
                     )
 
                 plt.plot([0, 1], [0, 1], color="k", linestyle=":")
@@ -367,6 +406,11 @@ class Plots:
                 plt.ylabel("fraction of events")
                 plt.savefig(pp, bbox_inches="tight", format="pdf", pad_inches=0.05)
                 plt.close()
+                if pickle_file is not None:
+                    pickle_data.append({"data_true": data_true, "data_gen": data_gen, "obs": obs})
+        if pickle_file is not None:
+            with open(pickle_file, "wb") as f:
+                pickle.dump(pickle_data, f)
 
     def plot_pulls(self, file: str):
         """
@@ -395,22 +439,30 @@ class Plots:
                 ]
                 self.hist_plot(pp, lines, bins, obs, show_ratios=False)
 
-    def plot_single_events(self, file: str):
+    def plot_single_events(self, file: str, pickle_file: Optional[str] = None):
         """
         Plots single event distributions for all observables.
         Args:
             file: Output file name
         """
-
+        pickle_data = []
         with PdfPages(file) as pp:
-            for obs, bins, data_true, data_gen in zip(
-                self.observables, self.bins, self.obs_hard, self.obs_gen_dist
-            ):
-                for i in range(5):
+            for j, (obs, bins, data_true, condition, data_gen) in enumerate(zip(
+                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_dist
+            )):
+                for i in range(10):
                     x_true = data_gen
                     #TODO: the commented out changes break non-bayesian single event plots. please check
                     #y_gen, y_gen_err = self.compute_hist_data(bins, data_gen[..., :, i])
                     y_gen, y_gen_err = self.compute_hist_data(bins, data_gen[..., i, :])
+                    event_reco = condition[i]
+                    std_j = self.x_reco[:, j].cpu().std(0)
+                    mask = np.abs(self.x_reco[:, j].cpu() - event_reco) < 0.01 * std_j
+                    close_events_reco = self.x_reco[mask, j].cpu()
+                    close_events_hard = self.x_hard[mask, j].cpu()
+                    y_gt, y_gt_err = self.compute_hist_data(bins, close_events_hard)
+
+
                     lines = [
                         Line(
                             y=data_true[i],
@@ -419,15 +471,42 @@ class Plots:
                             vline=True,
                         ),
                         Line(
+                            y=condition[i],
+                            label="Cond.",
+                            color=self.colors[2],
+                            vline=True,
+                            linestyle="dashed"
+                        ),
+                        Line(
                             y=y_gen,
                             y_ref=None,
                             label="Gen",
                             color=self.colors[1],
                         ),
+                        #Line(
+                        #    y=np.mean(data_gen[..., i, :]),
+                        #    y_ref=None,
+                        #    label="Gen mean",
+                        #    color=self.colors[1],
+                        #    vline = True,
+                        #    linestyle="dotted"
+                        #),
+                        Line(
+                            y=y_gt,
+                            y_ref=None,
+                            label="cond. GT ",
+                            color=self.colors[3],
+                            linestyle="solid"
+                        ),
                     ]
                     self.hist_plot(
-                        pp, lines, bins, obs, title=f"Event {i}", show_ratios=False
+                        pp, lines, bins, obs, title=f"Event {i+1}, true: {data_true[i]:.2f}, mean distr. {np.mean(data_gen[..., i, :]):.2f}", show_ratios=False, legend_kwargs={"loc": "best"}
                     )
+                    if pickle_file is not None:
+                        pickle_data.append({"lines": lines, "bins": bins, "obs": obs, "event_number": i+1, "reco": condition[i], "hard": data_true[i], "gen": data_gen[..., i, :]})
+        if pickle_file is not None:
+            with open(pickle_file, "wb") as f:
+                pickle.dump(pickle_data, f)
 
     def plot_preprocessed(self, file: str):
         """
@@ -488,6 +567,7 @@ class Plots:
         observable: Observable,
         show_ratios: bool = True,
         title: Optional[str] = None,
+        legend_kwargs: Optional[dict] = None,
         no_scale: bool = False,
         yscale: Optional[str] = None,
         metrics = None,
@@ -557,7 +637,7 @@ class Plots:
                         axs[1], bins, ratio, ratio_err, label=None, color=line.color, linestyle=line.linestyle,
                     )
 
-            axs[0].legend(frameon=False)
+            axs[0].legend(frameon=False, **(legend_kwargs if legend_kwargs is not None else {}))
             axs[0].set_ylabel("normalized")
             axs[0].set_yscale(observable.yscale if yscale is None else yscale)
             if title is not None:
@@ -828,7 +908,7 @@ class Plots:
                     triangle = get_triangle_distance(x_true, x_gen_nonMAP_single, bins, nboot=0)
                     nonMAP_single_emd_arrs.append(emd)
                     nonMAP_single_triangle_arrs.append(triangle)
-                print(f"Saving metrics after {b-n} bayesian samples for non-MAP(s)\n")
+                print(f"Saving metrics after {len(x_gen)-self.n_unfoldings} bayesian samples for non-MAP(s)\n") if len(x_gen) > self.n_unfoldings else print("No non-MAP unfoldings\n")   
                 # emd on non-MAP single unfoldings
                 obs.metrics["non_MAP_single_emd_arrs"] = np.array(nonMAP_single_emd_arrs)
                 # triangle on non-MAP single unfoldings

@@ -131,9 +131,22 @@ def evaluation_generative(
     observables = process.hard_observables()
     data_hard_pp = model.input_data_preprocessed[0]
     data_reco_pp = model.cond_data_preprocessed[0]
+
+    if params.get("train_classifier", False):
+        print(f"    Training classifier for evaluation")
+        rng = np.random.RandomState(0) # anything generated with this rng is reproducible
+        if model.model.bayesian:
+            permutation = torch.as_tensor(rng.permutation(len(data.x_hard) + len(x_gen_single[0])), device=model.device)
+        else:
+            permutation = torch.as_tensor(rng.permutation(len(data.x_hard) + len(x_gen_single)), device=model.device)
+        #model.train_classifier(doc = doc, raw_data = data, raw_gen_single = x_gen_single, raw_gen_dist = x_gen_dist, permutation = permutation)
+        eval_classifier_preds, test_gen_classifier, test_label_classifier = model.eval_classifier(doc = doc, raw_data = data, raw_gen_single = x_gen_single, raw_gen_dist = x_gen_dist, permutation = permutation, data = "test", model_name = "final", name = "")
+        print(test_gen_classifier.shape)                             
+
     plots = Plots(
         observables=observables,
         losses=model.losses,
+        cl_losses = model.cl_losses if params.get("train_classifier", False) else None,
         x_hard=data.x_hard,
         x_reco=data.x_reco,
         x_gen_single=x_gen_single,
@@ -144,11 +157,16 @@ def evaluation_generative(
         show_metrics=True,
         plot_metrics=params.get("plot_metrics", False),
         n_unfoldings = params.get("n_unfoldings", 1),
+        eval_classifier_preds = eval_classifier_preds if params.get("train_classifier", False) else None,
+        cl_gen_test = test_gen_classifier if params.get("train_classifier", False) else None,
+        cl_label_test = test_label_classifier if params.get("train_classifier", False) else None,
         debug = False,
     )
     if name == "":
         print(f"    Plotting loss")
         plots.plot_losses(doc.add_file("losses"+name+".pdf"))
+        if params.get("train_classifier", False):
+            plots.plot_losses(doc.add_file("classifier_losses"+name+".pdf"), cl_loss=True)
     print(f"    Plotting observables")
     if params.get("save_hist_data", True):
         pickle_file = doc.add_file("observables"+name+".pkl")
@@ -157,7 +175,6 @@ def evaluation_generative(
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
     #plots.plot_observables_full(doc.add_file("observables_full" + name + ".pdf"), None)
     plots.save_metrics(doc.add_file("metrics" + name + ".pkl"))
-
     if params.get("plot_metrics", True):
         plots.hist_metrics_unfoldings(doc.add_file("unfolding_metrics"+name+".pdf"))
         plots.plot_multiple_unfoldings(doc.add_file("unfolding_samples"+name+".pdf"))
@@ -169,12 +186,12 @@ def evaluation_generative(
     if params.get("plot_preprocessed", False) and name == "":
         print(f"    Plotting preprocessed data")
         plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
-    #print(f"    Plotting calibration")
-    #plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
+    print(f"    Plotting calibration")
+    plots.plot_calibration(doc.add_file("calibration"+name+".pdf"), pickle_file=doc.add_file("calibration"+name+".pkl"))
     #print(f"    Plotting pulls")
     #plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
     #print(f"    Plotting single events")
-    #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
+    #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"), pickle_file=doc.add_file("single_events"+name+".pkl"))
     print(f"    Plotting migration")
     #plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
 

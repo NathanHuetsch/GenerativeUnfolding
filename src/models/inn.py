@@ -104,6 +104,7 @@ class Subnet(nn.Module):
         dropout: float = 0.0,
         layer_class: Type = nn.Linear,
         layer_args: dict = {},
+        bayesian_last=False
     ):
         """
         Constructs the subnet.
@@ -121,18 +122,33 @@ class Subnet(nn.Module):
         if num_layers < 1:
             raise (ValueError("Subnet size has to be 1 or greater"))
         self.layer_list = []
-        for n in range(num_layers):
-            input_dim, output_dim = internal_size, internal_size
-            if n == 0:
-                input_dim = size_in
-            if n == num_layers - 1:
-                output_dim = size_out
-            self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        if not bayesian_last:
+            for n in range(num_layers):
+                input_dim, output_dim = internal_size, internal_size
+                if n == 0:
+                    input_dim = size_in
+                if n == num_layers - 1:
+                    output_dim = size_out
+                self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
 
-            if n < num_layers - 1:
-                if dropout > 0:
-                    self.layer_list.append(nn.Dropout(p=dropout))
-                self.layer_list.append(nn.ReLU())
+                if n < num_layers - 1:
+                    if dropout > 0:
+                        self.layer_list.append(nn.Dropout(p=dropout))
+                    self.layer_list.append(nn.ReLU())
+        else:
+            for n in range(num_layers):
+                input_dim, output_dim = internal_size, internal_size
+                if n == 0:
+                    input_dim = size_in
+                if n == num_layers - 1:
+                    output_dim = size_out
+                    self.layer_list.append(VBLinear(input_dim, output_dim))
+                else:
+                    self.layer_list.append(nn.Linear(input_dim, output_dim))
+                if n < num_layers - 1:
+                    if dropout > 0:
+                        self.layer_list.append(nn.Dropout(p=dropout))
+                    self.layer_list.append(nn.ReLU())
 
         self.layers = nn.Sequential(*self.layer_list)
 
@@ -167,6 +183,7 @@ class INN(nn.Module):
         if self.bayesian:
             self.bayesian_samples = params.get("bayesian_samples", 20)
             self.bayesian_layers = []
+            self.bayesian_factor = params.get("bayesian_factor", 1)
 
         self.latent_space = self.params.get("latent_space", "gaussian")
         if self.latent_space == "gaussian":
@@ -213,6 +230,7 @@ class INN(nn.Module):
                 dropout=self.params.get("dropout", 0.0),
                 layer_class=layer_class,
                 layer_args=layer_args,
+                bayesian_last=self.params.get("bayesian_last")
             )
             if self.bayesian:
                 self.bayesian_layers.extend(
@@ -278,15 +296,27 @@ class INN(nn.Module):
         Construct the INN
         """
         self.madnis_inn = self.params.get("madnis_inn", False)
+        bayesian_very_last = self.params.get("bayesian_very_last")
+        if bayesian_very_last:
+            print(f"    Using bayesian_very_last")
+            self.params["bayesian_last"] = False
+            self.bayesian = False
 
         if not self.madnis_inn:
             self.inn = ff.SequenceINN(self.dims_in)
             CouplingBlock, block_kwargs = self.get_coupling_block()
-            for i in range(self.params.get("n_blocks", 10)):
+            for i in range(self.params.get("n_blocks", 10) - 1):
                 self.inn.append(
                     CouplingBlock, cond=0, cond_shape=(self.dims_c,), **block_kwargs
                 )
 
+            if bayesian_very_last:
+                self.params["bayesian_last"] = True
+                self.bayesian = True
+            CouplingBlock, block_kwargs = self.get_coupling_block()
+            self.inn.append(
+                CouplingBlock, cond=0, cond_shape=(self.dims_c,), **block_kwargs
+            )
             return
 
         else:
@@ -353,10 +383,12 @@ class INN(nn.Module):
         Returns:
             log probabilities, shape (n_events, ) if not bayesian
         """
+        jet_mask = torch.isnan(c)
+        c_fixed = torch.where(jet_mask, 0, c)
         if not self.madnis_inn:
-            z, jac = self.inn(x, (c,))
+            z, jac = self.inn(x, (c_fixed,))
         else:
-            z, jac = self.inn(x, c)
+            z, jac = self.inn(x, c_fixed)
         return self.latent_log_prob(z) + jac
 
     def sample(self, c: torch.Tensor) -> torch.Tensor:
@@ -369,11 +401,13 @@ class INN(nn.Module):
             x: generated samples, shape (n_events, dims_in)
             log_prob: log probabilites, shape (n_events, )
         """
+        jet_mask = torch.isnan(c)
+        c_fixed = torch.where(jet_mask, 0, c)
         z = self.latent_dist.sample((c.shape[0],)).to(c.device, dtype=c.dtype)
         if not self.madnis_inn:
-            x, jac = self.inn(z, (c,), rev=True)
+            x, jac = self.inn(z, (c_fixed,), rev=True)
         else:
-            x, jac = self.inn.inverse(z, c)
+            x, jac = self.inn.inverse(z, c_fixed)
         return x
 
     def kl(self) -> torch.Tensor:
@@ -403,7 +437,7 @@ class INN(nn.Module):
         inn_loss = -self.log_prob(x, c).mean() / self.dims_in
         if self.bayesian:
             kl_loss = kl_scale * self.kl() / self.dims_in
-            loss = inn_loss + kl_loss
+            loss = inn_loss + kl_loss * self.bayesian_factor
             loss_terms = {
                 "loss": loss.item(),
                 "nll": inn_loss.item(),

@@ -128,6 +128,10 @@ class Subnet(nn.Module):
         embed_c_dim = network_params.get("embed_c_dim", params["dims_c"])
         embed_t_dim = network_params.get("embed_t_dim", 1)
 
+        final_output_dim = network_params.get("final_output_dim", None)
+        if final_output_dim is None:
+            final_output_dim = params["dims_in"]
+
         if params.get("give_x1"):
             embed_t_dim = embed_x_dim
 
@@ -152,17 +156,24 @@ class Subnet(nn.Module):
             layer_class = nn.Linear
             layer_args = {}
 
+        residual_linear = network_params.get("residual_linear", False)
+
         self.layer_list = []
         for n in range(num_layers):
+            layer_class = VBLinear if bayesian and bayesian_mode == "all" else nn.Linear
             input_dim, output_dim = internal_size, internal_size
             if n == 0:
                 input_dim = embed_t_dim + embed_x_dim + embed_c_dim
-            if n == num_layers - 1:
-                output_dim = params["dims_in"]
+            elif n == num_layers - 1:
+                output_dim = final_output_dim
                 if bayesian and bayesian_mode == "last":
                     layer_class = VBLinear
                     layer_args = {"prior_prec": params.get("prior_prec", 1.0),
                                   "std_init": params.get("std_init", -9)}
+
+            else:
+                if not bayesian and residual_linear:
+                   layer_class = ResidualLinear
             self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
 
             if n < num_layers - 1:
@@ -175,6 +186,120 @@ class Subnet(nn.Module):
                 param.data *= 0.02
 
         self.layers = nn.Sequential(*self.layer_list)
+
+    def forward(self, t, x, c=None):
+        if self.conditional:
+            return self.layers(torch.cat([t, x, c], dim=-1))
+        else:
+            return self.layers(torch.cat([t, x], dim=-1))
+
+
+class UpAndDownNet(nn.Module):
+    """
+    Standard MLP or bayesian network to be used as a trainable subnet in INNs
+    """
+
+    def __init__(
+            self,
+            params,
+            conditional=True
+    ):
+        super().__init__()
+        network_params = params.get("network_params")
+
+        embed_x_dim = network_params.get("embed_x_dim", params["dims_in"])
+        embed_c_dim = network_params.get("embed_c_dim", params["dims_c"])
+        embed_t_dim = network_params.get("embed_t_dim", 1)
+
+        final_output_dim = network_params.get("final_output_dim", None)
+        if final_output_dim is None:
+            final_output_dim = params["dims_in"]
+
+        self.conditional = conditional
+        if not conditional:
+            embed_c_dim = 0
+
+        #num_layers = network_params.get("layers_per_block", 3)
+        #assert num_layers > 5
+        internal_size = network_params.get("internal_size", 3)
+        assert internal_size > 4*(embed_t_dim + embed_x_dim + embed_c_dim)
+        activation = network_params.get("activation", nn.SiLU)
+        if isinstance(activation, str):
+            activation = getattr(nn, activation)
+
+        bayesian = params.get("bayesian", False)
+        bayesian_mode = params.get("bayesian_mode", "all")
+        if bayesian and bayesian_mode == "all":
+            layer_class = VBLinear
+            layer_args = {"prior_prec": params.get("prior_prec", 1.0),
+                          "std_init": params.get("std_init", -9)}
+        else:
+            layer_class = nn.Linear
+            layer_args = {}
+
+
+        self.layer_list = []
+
+        input_dim = embed_t_dim + embed_x_dim + embed_c_dim
+        output_dim = 2*input_dim
+        self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        self.layer_list.append(activation())
+
+        input_dim = output_dim
+        output_dim = 2 * input_dim
+        self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        self.layer_list.append(activation())
+
+        #input_dim = output_dim
+        #output_dim = 2 * input_dim
+        #self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        #self.layer_list.append(activation())
+
+        input_dim = output_dim
+        output_dim = internal_size
+        self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        self.layer_list.append(activation())
+
+        input_dim = internal_size
+        output_dim = internal_size
+        #self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        #self.layer_list.append(activation())
+        #self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        #self.layer_list.append(activation())
+        self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        self.layer_list.append(activation())
+
+        input_dim = internal_size
+        output_dim = int(input_dim/2)
+        self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        self.layer_list.append(activation())
+
+        #input_dim = output_dim
+        #output_dim = int(input_dim / 2)
+        #self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        #self.layer_list.append(activation())
+
+        #input_dim = output_dim
+        #output_dim = int(input_dim / 2)
+        #self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        #self.layer_list.append(activation())
+
+        input_dim = output_dim
+        output_dim = int(input_dim / 2)
+        self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+        self.layer_list.append(activation())
+
+        input_dim = output_dim
+        output_dim = final_output_dim
+        self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+
+        for name, param in self.layer_list[-1].named_parameters():
+            if "logsig2_w" not in name:
+                param.data *= 0.02
+
+        self.layers = nn.Sequential(*self.layer_list)
+
+        print(self.layers)
 
     def forward(self, t, x, c=None):
         if self.conditional:
@@ -549,6 +674,16 @@ class VBLinear(nn.Module):
         return f"{self.__class__.__name__} ({self.n_in}) -> ({self.n_out})"
 
 
+class ResidualLinear(nn.Module):
+
+    def __init__(self, in_features, out_features):
+        super(ResidualLinear, self).__init__()
+        self.linear = nn.Linear(in_features, out_features)
+
+    def forward(self, x):
+        return self.linear(x) + x
+
+
 class ODEsolver(nn.Module):
 
     def __init__(self, params):
@@ -585,7 +720,7 @@ class ODEsolver(nn.Module):
                     options=dict(step_size=self.step_size)
                 )
             except AssertionError:
-                warnings.warn(f"    Integration with {self.method} failed, trying with RK4")
+                print(f"    Integration with {self.method} failed, trying with RK4")
                 x_t = odeint(
                     func=function,
                     y0=x_initial,

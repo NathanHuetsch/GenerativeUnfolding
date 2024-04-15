@@ -31,6 +31,7 @@ class CFM(nn.Module):
         self.bayesian_layers = []
         self.bayesian_factor = params.get("bayesian_factor", 1)
 
+
         t_noise_scale = params.get("t_noise_scale", 0)
         minimum_noise_scale = params.get("minimum_noise_scale", 0)
         self.trajectory = LinearTrajectory(t_noise_scale=t_noise_scale,
@@ -319,6 +320,8 @@ class CFMwithTransformer(CFM):
 
     def __init__(self, params: dict):
         super().__init__(params)
+        self.reco_jets = self.params["process_params"].get("reco_jets", 4)
+        print(f"    Using reco_jets {self.reco_jets}")
 
     def build_net(self):
         self.dim_embedding = self.params["dim_embedding"]
@@ -340,13 +343,15 @@ class CFMwithTransformer(CFM):
             layer_args["prior_prec"] = self.params["prior_prec"]
         if "std_init" in self.params:
             layer_args["std_init"] = self.params["std_init"]
-        self.net = layer_class(self.dim_embedding+1, 1, **layer_args)
+        self.net = layer_class(self.dim_embedding+self.embed_t_dim, 1, **layer_args)
         n_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
         print(f"        Network: Final layer with {n_params} parameters")
 
         if self.bayesian:
             self.bayesian_layers.append(self.net)
             print(f"        Bayesian set to True, Bayesian layers: ", len(self.bayesian_layers))
+
+
 
     def compute_embedding(
         self, p: torch.Tensor, n_components: int, t: torch.Tensor = None
@@ -366,6 +371,17 @@ class CFMwithTransformer(CFM):
         assert n_rest >= 0
         zeros = torch.zeros((*p.shape[:2], n_rest), device=p.device, dtype=p.dtype)
         return torch.cat((p, one_hot, zeros), dim=-1)
+
+    def compute_padding_mask(
+        self, p: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Appends the one-hot encoded position to the momenta p. Then this is either zero-padded
+        or an embedding net is used to compute the embedding of the correct dimension.
+        """
+        mask = torch.isnan(p)
+        #print(mask[:, :23].float().mean(), mask[:, 23:27].float().mean(), mask[:, 27:].float().mean())
+        return mask
 
     def batch_loss(
             self, x: torch.Tensor, c: torch.Tensor, kl_scale: float = 0.0
@@ -392,18 +408,34 @@ class CFMwithTransformer(CFM):
         # Predict the velocity
         #if self.embed_t:
         #    t = self.t_embedding(t)
-        embedding = self.transformer(
-            src=self.compute_embedding(
-                c,
-                n_components=self.dims_c
-            ),
-            tgt=self.compute_embedding(
-                x_t,
-                n_components=self.dims_in,
-                t = t
+        if self.reco_jets > 4:
+            jet_mask = self.compute_padding_mask(c)
+            c_fixed = torch.where(jet_mask, 0, c)
+            embedding = self.transformer(
+                src=self.compute_embedding(
+                    c_fixed,
+                    n_components=self.dims_c
+                ),
+                tgt=self.compute_embedding(
+                    x_t,
+                    n_components=self.dims_in,
+                    t=t
+                ))#,src_key_padding_mask=jet_mask)
+        else:
+            embedding = self.transformer(
+                src=self.compute_embedding(
+                    c,
+                    n_components=self.dims_c
+                ),
+                tgt=self.compute_embedding(
+                    x_t,
+                    n_components=self.dims_in,
+                    t=t
+                )
             )
-        )
-        v_pred = self.net(torch.cat([t.unsqueeze(-1).repeat(1, x_t.size(1), 1), embedding], dim=-1)).squeeze()
+
+        t = self.t_embedding(t)
+        v_pred = self.net(torch.cat([t.unsqueeze(1).repeat(1, x_t.size(1), 1), embedding], dim=-1)).squeeze()
         #v_pred = self.net(embedding).squeeze()
         # Calculate the loss
         cfm_loss = self.loss_fct(v_pred, x_t_dot)
@@ -449,11 +481,22 @@ class CFMwithTransformer(CFM):
                 ),
                 memory
             )
-            v = self.net(torch.cat([t.unsqueeze(-1).repeat(1, x_t.size(1), 1), embedding], dim=-1)).squeeze()
+            t = self.t_embedding(t)
+            v = self.net(torch.cat([t.unsqueeze(1).repeat(1, x_t.size(1), 1), embedding], dim=-1)).squeeze()
+            # v_pred = self.net(embedding).squeeze()
+            #v = self.net(torch.cat([t.unsqueeze(-1).repeat(1, x_t.size(1), 1), embedding], dim=-1)).squeeze()
             return v
 
         with torch.no_grad():
-            memory = self.transformer.encoder(self.compute_embedding(
+            if self.reco_jets > 4:
+                jet_mask = self.compute_padding_mask(c)
+                c_fixed = torch.where(jet_mask, 0, c)
+                memory = self.transformer.encoder(self.compute_embedding(
+                        c_fixed,
+                        n_components=self.dims_c,
+                    ))#,src_key_padding_mask=jet_mask)
+            else:
+                memory = self.transformer.encoder(self.compute_embedding(
                     c,
                     n_components=self.dims_c
                 ))
@@ -461,4 +504,168 @@ class CFMwithTransformer(CFM):
             x_1 = torch.randn((batch_size, self.dims_in), dtype=dtype, device=device)
             # Solve the ODE from t=1 to t=0 from the sampled initial condition
             x_t = self.solver(net_wrapper, x_1, reverse=True)
+        return x_t[-1]
+
+
+class TransfusionAR(CFM):
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+
+    def build_net(self):
+        self.dim_embedding = self.params["dim_embedding"]
+        self.transformer = nn.Transformer(
+            d_model=self.dim_embedding,
+            nhead=self.params["n_head"],
+            num_encoder_layers=self.params["n_encoder_layers"],
+            num_decoder_layers=self.params["n_decoder_layers"],
+            dim_feedforward=self.params["dim_feedforward"],
+            dropout=self.params.get("dropout", 0.0),
+            batch_first=True,
+        )
+        n_params = sum(p.numel() for p in self.transformer.parameters() if p.requires_grad)
+        print(f"        Network: Transformer with {n_params} parameters")
+
+        layer_class = VBLinear if self.bayesian else nn.Linear
+        layer_args = {}
+        if "prior_prec" in self.params:
+            layer_args["prior_prec"] = self.params["prior_prec"]
+        if "std_init" in self.params:
+            layer_args["std_init"] = self.params["std_init"]
+
+        self.params["network_params"]["embed_x_dim"] = 1
+        self.params["network_params"]["embed_c_dim"] = self.dim_embedding
+        self.params["network_params"]["final_output_dim"] = 1
+
+        self.net = Subnet(self.params, conditional=True)
+        n_params = sum(p.numel() for p in self.net.parameters() if p.requires_grad)
+        print(f"        Network: Final layer with {n_params} parameters")
+
+        if self.bayesian:
+            self.bayesian_layers.append(self.net)
+            print(f"        Bayesian set to True, Bayesian factor: {self.bayesian_factor}, Bayesian layers: ", len(self.bayesian_layers))
+
+    def compute_embedding(
+        self, p: torch.Tensor, n_components: int, t: torch.Tensor = None
+    ) -> torch.Tensor:
+        """
+        Appends the one-hot encoded position to the momenta p. Then this is either zero-padded
+        or an embedding net is used to compute the embedding of the correct dimension.
+        """
+        one_hot = torch.eye(n_components, device=p.device, dtype=p.dtype)[
+            None, : p.shape[1], :
+        ].expand(p.shape[0], -1, -1)
+        if t is None:
+            p = p.unsqueeze(-1)
+        else:
+            p = torch.cat([p.unsqueeze(-1), t.unsqueeze(-1).expand(t.shape[0], p.shape[1], 1)], dim=-1)
+        n_rest = self.dim_embedding - n_components - p.shape[-1]
+        assert n_rest >= 0
+        zeros = torch.zeros((*p.shape[:2], n_rest), device=p.device, dtype=p.dtype)
+        return torch.cat((p, one_hot, zeros), dim=-1)
+
+    def batch_loss(
+            self, x: torch.Tensor, c: torch.Tensor, kl_scale: float = 0.0
+    ) -> tuple[torch.Tensor, dict]:
+        """
+        Evaluate the log probability
+
+        Args:
+            x: input tensor, shape (n_events, dims_in)
+            c: condition tensor, shape (n_events, dims_c)
+            kl_scale: factor in front of KL loss term, default 0
+        Returns:
+            loss: batch loss
+            loss_terms: dictionary with loss contributions
+        """
+        # Sample a target for the diffusion trajectory
+        x_1 = torch.randn(x.size(), dtype=x.dtype, device=x.device)
+        # Sample a time step
+        t = torch.rand((x.size(0), 1), dtype=x.dtype, device=x.device)
+        # Calculate x_t along the trajectory
+        x_t = (1 - t) * x + t * x_1
+        # Calculate the derivative of x_t, i.e. the conditional velocity
+        x_t_dot = -x + x_1
+        # Predict the velocity
+        #if self.embed_t:
+        #    t = self.t_embedding(t)
+        xp = nn.functional.pad(x[:, :-1], (1, 0))
+        embedding = self.transformer(
+            src=self.compute_embedding(
+                c,
+                n_components=self.dims_c,
+            ),
+            tgt=self.compute_embedding(
+                xp,
+                n_components=self.dims_in + 1,
+            ),
+            tgt_mask=torch.ones(
+                (xp.shape[1], xp.shape[1]), device=x.device, dtype=torch.bool
+            ).triu(diagonal=1),
+        )
+
+        t = self.t_embedding(t)
+        v_pred = self.net(t.unsqueeze(1).repeat(1, x_t.size(1), 1), x_t.unsqueeze(-1), embedding).squeeze()
+
+        # Calculate the loss
+        cfm_loss = self.loss_fct(v_pred, x_t_dot)
+
+        if self.bayesian:
+            kl_loss = kl_scale * self.kl() / self.dims_in
+            loss = cfm_loss + kl_loss
+            loss_terms = {
+                "loss": loss.item(),
+                "mse": cfm_loss.item(),
+                "kl": kl_loss.item(),
+            }
+        else:
+            loss = cfm_loss
+            loss_terms = {
+                "loss": loss.item(),
+            }
+        return loss, loss_terms
+
+    def sample(self, c: torch.Tensor) -> torch.Tensor:
+        """
+        Generates samples and log probabilities for the given condition
+
+        Args:
+            c: condition tensor, shape (n_events, dims_c)
+        Returns:
+            x: generated samples, shape (n_events, dims_in)
+        """
+        x = torch.zeros((c.shape[0], 1), device=c.device, dtype=c.dtype)
+        c_emb = self.compute_embedding(
+            c, n_components=self.dims_c)
+        for i in range(self.dims_in):
+            embedding = self.transformer(
+                src=c_emb,
+                tgt=self.compute_embedding(
+                    x,
+                    n_components=self.dims_in + 1),
+                tgt_mask=torch.ones(
+                    (x.shape[1], x.shape[1]), device=x.device, dtype=torch.bool
+                ).triu(diagonal=1),
+            )
+            x_new = self.sample_dimension(embedding[:, -1:, :])
+            x = torch.cat((x, x_new), dim=1)
+        return x[:, 1:]
+
+    def sample_dimension(self, c):
+
+        batch_size = c.size(0)
+        dtype = c.dtype
+        device = c.device
+
+        def net_wrapper(t, x_t):
+            t_torch = t * torch.ones((x_t.size(0), 1), dtype=dtype, device=device)
+            t_torch = self.t_embedding(t_torch)
+            v_pred = self.net(t_torch.unsqueeze(1), x_t.unsqueeze(-1), c).reshape((x_t.size(0), 1))
+            return v_pred
+
+        with torch.no_grad():
+            # Sample from the latent distribution
+            x_0 = self.latent_dist.sample((batch_size, 1)).to(device, dtype=dtype)[..., 0]
+            # Solve the ODE from t=1 to t=0 from the sampled initial condition
+            x_t = self.solver(net_wrapper, x_0, reverse=False)
         return x_t[-1]

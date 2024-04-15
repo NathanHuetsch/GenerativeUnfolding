@@ -1,0 +1,63 @@
+run_name: inn_bay
+run_folder: save_shit
+
+method: GenerativeUnfolding
+
+process: ZJetsGenerative
+process_params:
+  #loader: ours
+  train_slice: [0., 0.6]
+  val_slice: [0.6, 0.65]
+  test_slice: [0.65, 1.0]
+  training_file: "data/Pythia26_full.npz"
+  analysis_file: "data/Herwig_full.npz"
+
+# Preprocessing
+hard_preprocessing:
+  # add uniform noise [-0.5, 0.5] to these channels
+  uniform_noise_channels: [2]
+  #erf_norm_channels: []
+  #cubic_root_channels: [0, 1, 2, 3]
+  #log_channels: [0, 1, 2]
+  special_preproc: True
+reco_preprocessing:
+  uniform_noise_channels: [2]
+  #erf_norm_channels: []
+  #cubic_root_channels: [0, 1, 2, 3]
+  #log_channels: [0, 1, 2]
+  special_preproc: True
+
+# Training
+lr: 1.e-3
+max_lr: 3.e-4
+batch_size: 128
+batch_size_sample: 10000
+lr_scheduler: cosine_annealing
+weight_decay: 0.
+betas: [0.9, 0.999]
+epochs: 1
+
+# Architecture
+model: INN
+bayesian: True
+bayesian_samples: 3
+
+latent_space: gaussian
+uniform_bounds: [0., 1.]
+
+n_blocks: 10
+internal_size: 16
+layers_per_block: 3
+coupling_type: rational_quadratic
+permutations: soft
+permute_soft: True
+num_bins: 6
+dropout: 0.0
+
+dist_samples_per_event: 2
+n_unfoldings: 5
+save_hist_data: True
+evaluate_train: False
+evaluate_analysis: False
+evaluate_comparison: True
+plot_metrics: True

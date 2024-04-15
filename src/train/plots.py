@@ -66,6 +66,9 @@ class Plots:
         self.x_hard_pp = x_hard_pp
         self.x_reco_pp = x_reco_pp
 
+        self.x_hard = x_hard
+        self.x_reco = x_reco
+
         self.obs_hard = []
         self.obs_reco = []
         self.obs_gen_single = []
@@ -96,7 +99,7 @@ class Plots:
         self.n_unfoldings = x_gen_single.shape[-3]
         self.bayesian = bayesian
         self.show_metrics = show_metrics
-        self.colors = [f"C{i}" for i in range(10)]
+        self.colors = [f"C{i}" for i in range(20)]
         self.plot_metrics = plot_metrics
         if self.show_metrics:
             print(f"    Computing metrics")
@@ -267,16 +270,12 @@ class Plots:
                 self.observables, self.obs_hard, self.obs_gen_dist
             ):
                 data_true = data_true[None, ...]
-                if not self.bayesian:
-                    data_gen = data_gen[None, ...]
-                #TODO: the commented out changes break non-bayesian calibration plots. please check
+                data_gen = data_gen[None, ...]
                 data_true = data_true[:, : data_gen.shape[1]]
-                #data_true = data_true[:, : data_gen.shape[-1]]
                 calibration_x = np.linspace(0, 1, 101)
                 for i, (data_true_elem, data_gen_elem) in enumerate(
                     zip(data_true, data_gen)
                 ):
-                    #quantiles = np.mean(data_gen_elem < data_true_elem[None, :], axis=0)
                     quantiles = np.mean(data_gen_elem < data_true_elem[:, None], axis=1)
                     calibration_y = np.mean(
                         quantiles[:, None] < calibration_x[None, :], axis=0
@@ -329,31 +328,189 @@ class Plots:
         """
 
         with PdfPages(file) as pp:
-            for obs, bins, data_true, data_gen in zip(
-                self.observables, self.bins, self.obs_hard, self.obs_gen_dist
-            ):
+            for j, (obs, bins, data_true, data_reco, data_gen) in enumerate(zip(
+                self.observables, self.bins, self.obs_hard, self.obs_reco, self.obs_gen_dist
+            )):
                 for i in range(5):
-                    x_true = data_gen
-                    #TODO: the commented out changes break non-bayesian single event plots. please check
-                    #y_gen, y_gen_err = self.compute_hist_data(bins, data_gen[..., :, i])
                     y_gen, y_gen_err = self.compute_hist_data(bins, data_gen[..., i, :])
+                    y_hard, y_hard_err = self.compute_hist_data(bins, data_true, bayesian=False)
+                    n_unfoldings = data_gen[..., i, :].shape[-1]
+
+                    # extract reco event in plot dimension
+                    event_reco_plotdim = data_reco[i]
+
+                    # calculate close reco events in plot dimension
+                    std_j = self.x_reco[:, j].std(0)
+                    mask_plotdim = np.abs(self.x_reco[:, j] - event_reco_plotdim) < 0.001*std_j
+                    n_close_events = mask_plotdim.sum()
+                    print(f"    dim {j}, event {i}, close events {n_close_events}")
+                    #n_close_events = 400
+                    #mask_plotdim = np.argsort(np.abs(self.x_reco[:, j] - event_reco_plotdim))[:n_close_events]
+
+                    # extract reco and hard events that are close in plot reco dimension
+                    close_events_reco_plotdim = self.x_reco[mask_plotdim]
+                    close_events_hard_plotdim = self.x_hard[mask_plotdim]
+
+                    # calculate histograms
+                    y_gt, _ = self.compute_hist_data(bins, close_events_hard_plotdim[:, j])
+                    y_close_reco, _ = self.compute_hist_data(bins, close_events_reco_plotdim[:, j])
+
+                    # plot
                     lines = [
                         Line(
                             y=data_true[i],
                             label="Truth",
-                            color=self.colors[0],
+                            color=self.colors[1],
                             vline=True,
+                        ),
+                        Line(
+                            y=event_reco_plotdim,
+                            label="Reco",
+                            color=self.colors[4],
+                            vline=True,
+                        ),
+                        Line(
+                            y=y_hard,
+                            label="Full hard",
+                            color=self.colors[7],
                         ),
                         Line(
                             y=y_gen,
                             y_ref=None,
                             label="Gen",
-                            color=self.colors[1],
+                            color=self.colors[0],
                         ),
+                        Line(
+                            y=y_gt,
+                            y_ref=None,
+                            label="GT",
+                            color=self.colors[2],
+                        )
                     ]
                     self.hist_plot(
                         pp, lines, bins, obs, title=f"Event {i}", show_ratios=False
                     )
+
+                    # cut on other 6 dimensions
+                    for cut_dim in range(6):
+                        # skip if cut dimension is plot dimension
+                        if cut_dim == j:
+                            continue
+
+                        # extract close reco events in cut dimension
+                        close_events_reco_cut_dim = close_events_reco_plotdim[:, cut_dim]
+                        # find out where the test event is relative to other events in cut_dim
+                        reco_cutdim = self.obs_reco[cut_dim]
+                        event_reco_cutdim = self.obs_reco[cut_dim][i]
+                        #mask_cutdim = np.argsort(np.abs(self.x_reco[:, cut_dim] - event_reco_cutdim))[:n_close_events]
+
+                        # std_cut_dim = self.x_reco[:, cut_dim].std(0)
+                        # mask_cutdim = np.abs(self.x_reco[:, cut_dim] - event_reco_cutdim) < 0.1 * std_cut_dim
+                        #n_close_events = mask_plotdim.sum()
+
+                        # full_mask = mask_plotdim*mask_cutdim
+
+                        # ct on cutdim
+                        # close_events_hard_plotdim_cutdim = self.x_hard[full_mask]
+
+                        where_in_cutdim = (close_events_reco_cut_dim < event_reco_cutdim).float().mean()
+                        # split close reco events in halfs sorted by cut dimension
+                        close_events_reco_cut_dim = np.argsort(close_events_reco_cut_dim)
+
+                        quantile25_1 = close_events_reco_cut_dim[:int(n_close_events/4)]
+                        quantile25_2 = close_events_reco_cut_dim[int(n_close_events / 4):2*int(n_close_events / 4)]
+                        quantile25_3 = close_events_reco_cut_dim[int(n_close_events / 4)*2:3 * int(n_close_events / 4)]
+                        quantile25_4 = close_events_reco_cut_dim[3*int(n_close_events / 4):]
+
+                        # half_1, half_2 = close_events_reco_cut_dim[:int(n_close_events/2)], close_events_reco_cut_dim[int(n_close_events/2):]
+                        # make histogram of corresponding hard events in plot dimension
+
+
+
+                        # make histograms of upper and lower 50quantile in cutdim
+                        # y_gt_1, y_gt_err = self.compute_hist_data(bins, close_events_hard_plotdim[half_1, j])
+                        # y_gt_2, y_gt_err = self.compute_hist_data(bins, close_events_hard_plotdim[half_2, j])
+
+                        # make histograms of 25quantiles in cutdim
+                        y_gt_quant1, y_gt_err = self.compute_hist_data(bins, close_events_hard_plotdim[quantile25_1, j])
+                        y_gt_quant2, y_gt_err = self.compute_hist_data(bins, close_events_hard_plotdim[quantile25_2, j])
+                        y_gt_quant3, y_gt_err = self.compute_hist_data(bins, close_events_hard_plotdim[quantile25_3, j])
+                        y_gt_quant4, y_gt_err = self.compute_hist_data(bins, close_events_hard_plotdim[quantile25_4, j])
+
+                        # make histogram of twice cut
+                        # y_gt_cut, _ = self.compute_hist_data(bins, close_events_hard_plotdim_cutdim[:, j])
+
+                        lines = [
+                            # Line(
+                            #     y=data_true[i],
+                            #     label="Truth",
+                            #     color=self.colors[1],
+                            #     vline=True,
+                            # ),
+                            # Line(
+                            #     y=event_reco,
+                            #     label="Reco",
+                            #     color=self.colors[4],
+                            #     vline=True,
+                            # ),
+                             Line(
+                                 y=y_gen,
+                                 y_ref=None,
+                                 label="Gen",
+                                 color=self.colors[0],
+                             ),
+                             # Line(
+                             #     y=y_gt,
+                             #     y_ref=None,
+                             #     label="GT",
+                             #     color=self.colors[2],
+                             # ),
+                             # Line(
+                             #     y=y_gt_cut,
+                             #     y_ref=None,
+                             #     label=f"GT cut {cut_dim}",
+                             #     color=self.colors[9],
+                             # ),
+                            # Line(
+                            #    y=y_gt_1,
+                            #    y_ref=None,
+                            #    label="GT below med",
+                            #    color=self.colors[5],
+                            # ),
+                            # Line(
+                            #    y=y_gt_2,
+                            #    y_ref=None,
+                            #    label="GT above med",
+                            #    color=self.colors[6],
+                            # )
+                            Line(
+                                y=y_gt_quant1,
+                                y_ref=None,
+                                label="GT 25Quant 1",
+                                color=self.colors[11],
+                            ),
+                            # Line(
+                            #     y=y_gt_quant2,
+                            #     y_ref=None,
+                            #     label="GT 25Quant 2",
+                            #     color=self.colors[12],
+                            # ),
+                            # Line(
+                            #     y=y_gt_quant3,
+                            #     y_ref=None,
+                            #     label="GT 25Quant 3",
+                            #     color=self.colors[13],
+                            # ),
+                            Line(
+                                y=y_gt_quant4,
+                                y_ref=None,
+                                label="GT 25Quant 4",
+                                color=self.colors[14],
+                            ),
+                        ]
+                        #self.hist_plot(
+                        #    pp, lines, bins, obs, title=f"Event {i} vs dim {cut_dim}, pos {where_in_cutdim:.2f}", show_ratios=False
+                        #)
 
     def plot_preprocessed(self, file: str):
         """
@@ -1404,3 +1561,210 @@ class OmnifoldPlots(Plots):
             obs.emd_std = round(emd_std, 5)
             obs.triangle_mean = round(triangle_dist_mean, 4)
             obs.triangle_std = round(triangle_dist_std, 5)
+
+
+class TTBar_Plots(Plots):
+    """
+    Implements the plotting pipeline to evaluate the performance of conditional generative
+    networks.
+    """
+
+    def __init__(
+        self,
+        observables: list[Observable],
+        losses: dict,
+        x_hard: torch.Tensor,
+        x_gen_single: torch.Tensor,
+        x_gen_dist: torch.Tensor=None,
+        x_hard_pp=None,
+        x_reco_pp=None,
+        bayesian: bool = False
+    ):
+        """
+        Initializes the plotting pipeline with the data to be plotted.
+        Args:
+            doc: Documenter object
+            observables: List of observables
+            losses: Dictionary with loss terms and learning rate as a function of the epoch
+            x_test: Data from test dataset
+            x_gen_single: Generated data (single point for each test sample)
+            x_gen_dist: Generated data (multiple points for subset of test data)
+            event_type: Event types for the test dataset
+            bayesian: Boolean that indicates if the model is bayesian
+        """
+        self.observables = observables
+        self.losses = losses
+
+        self.x_hard_pp = x_hard_pp
+        self.x_reco_pp = x_reco_pp
+
+        self.obs_hard = []
+        self.obs_gen_single = []
+        self.obs_gen_dist = []
+        self.bins = []
+
+        for obs in observables:
+            o_hard = obs.compute(x_hard)
+            self.obs_hard.append(o_hard.cpu().numpy())
+
+            o_gen_single = obs.compute(x_gen_single)
+            self.obs_gen_single.append(o_gen_single.cpu().numpy())
+
+            o_gen_dist = obs.compute(x_gen_dist)
+            self.obs_gen_dist.append(o_gen_dist.cpu().numpy())
+
+            self.bins.append(obs.bins(o_hard).cpu().numpy())
+
+        self.n_unfoldings = x_gen_single.shape[-3]
+        self.bayesian = bayesian
+        self.colors = [f"C{i}" for i in range(10)]
+
+        plt.rc("font", family="serif", size=16)
+        plt.rc("axes", titlesize="medium")
+        plt.rc("text.latex", preamble=r"\usepackage{amsmath}")
+        plt.rc("text", usetex=True)
+
+
+    def plot_losses(self, file: str):
+        """
+        Makes plots of the losses (total loss and if bayesian, BCE loss and KL loss
+        separately) and learning rate as a function of the epoch.
+        Args:
+            file: Output file name
+        """
+        with PdfPages(file) as pp:
+            self.plot_single_loss(
+                pp,
+                "loss",
+                (self.losses["tr_loss"], self.losses["val_loss"]),
+                ("train", "val"),
+            )
+            if self.bayesian:
+                self.plot_single_loss(
+                    pp,
+                    "INN loss",
+                    (self.losses["train_inn_loss"], self.losses["val_inn_loss"]),
+                    ("train", "val"),
+                )
+                self.plot_single_loss(
+                    pp,
+                    "KL loss",
+                    (self.losses["train_kl_loss"], self.losses["val_kl_loss"]),
+                    ("train", "val"),
+                )
+            self.plot_single_loss(
+                pp, "learning rate", (self.losses["lr"],), (None,), "log"
+            )
+
+    def plot_single_loss(
+        self,
+        pp: PdfPages,
+        ylabel: str,
+        curves: tuple[np.ndarray],
+        labels: tuple[str],
+        yscale: str = "linear",
+    ):
+        """
+        Makes single loss plot.
+        Args:
+            pp: Multipage PDF object
+            ylabel: Y axis label
+            curves: List of numpy arrays with the loss curves to be plotted
+            labels: Labels of the loss curves
+            yscale: Y axis scale, "linear" or "log"
+        """
+        fig, ax = plt.subplots(figsize=(4, 3.5))
+        for i, (curve, label) in enumerate(zip(curves, labels)):
+            epochs = np.arange(6, len(curve) + 6)
+            ax.plot(epochs[5:], curve[5:], label=label)
+        ax.set_xlabel("epoch")
+        ax.set_ylabel(ylabel)
+        ax.set_yscale(yscale)
+        if any(label is not None for label in labels):
+            ax.legend(loc="center right", frameon=False)
+        plt.savefig(pp, format="pdf", bbox_inches="tight")
+        plt.close()
+
+    def plot_observables(self, file: str, pickle_file: Optional[str] = None):
+        """
+        Makes histograms of truth and generated distributions for all observables.
+        Args:
+            file: Output file name
+        """
+        pickle_data = []
+        with PdfPages(file) as pp:
+            for obs, bins, data_hard, data_gen in zip(
+                self.observables, self.bins, self.obs_hard, self.obs_gen_single
+            ):
+                if self.bayesian:
+                    data = data_gen[:, 0]
+                else:
+                    data = data_gen[0]
+
+                y_hard, y_hard_err = self.compute_hist_data(bins, data_hard, bayesian=False)
+                y_gen, y_gen_err = self.compute_hist_data(bins, data, bayesian=self.bayesian)
+                lines = [
+                    Line(
+                        y=y_hard,
+                        y_err=y_hard_err,
+                        label="Hard",
+                        color=self.colors[0],
+                    ),
+                    Line(
+                        y=y_gen,
+                        y_err=y_gen_err,
+                        y_ref=y_hard,
+                        label="Unfold",
+                        color=self.colors[1],
+                    ),
+                ]
+                if self.bayesian:
+                    bay_n, dist_n, data_n = data_gen.shape
+                    data = data_gen.reshape(bay_n, -1)
+                else:
+                    dist_n, data_n = data_gen.shape
+                    data = data_gen.reshape(-1)
+                y_gen_full, y_gen_err = self.compute_hist_data(bins, data, bayesian=self.bayesian)
+
+                lines.append(
+                    Line(
+                        y=y_gen_full,
+                        y_err=y_gen_err,
+                        y_ref=y_hard,
+                        label=f"{dist_n} Unfoldings",
+                        color=self.colors[3]
+                    )
+                )
+                self.hist_plot(pp, lines, bins, obs, metrics=None)
+                if pickle_file is not None:
+                    pickle_data.append({"lines": lines, "bins": bins, "obs": obs})
+
+        if pickle_file is not None:
+            with open(pickle_file, "wb") as f:
+                pickle.dump(pickle_data, f)
+
+    def plot_preprocessed(self, file: str):
+        """
+        Plots preprocessed observable distributions
+        Args:
+            file: Output file name
+        """
+
+        with PdfPages(file) as pp:
+            for i, data_hard_pp in enumerate(self.x_hard_pp.T):
+                try:
+                    bins = 100
+                    plt.hist(data_hard_pp.cpu().numpy(), bins=bins, density=True)
+                    plt.title(f"Hard PP, dim {i}")
+                    plt.savefig(pp, format="pdf", bbox_inches="tight")
+                    plt.close()
+                except:
+                    print(f" dim {i} of hard failed")
+
+
+            for i, data_hard_pp in enumerate(self.x_reco_pp.T):
+                bins = 100
+                plt.hist(data_hard_pp.cpu().numpy(), bins=bins, density=True)
+                plt.title(f"Reco PP, dim {i}")
+                plt.savefig(pp, format="pdf", bbox_inches="tight")
+                plt.close()

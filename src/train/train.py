@@ -8,8 +8,9 @@ import torch
 from ema_pytorch import EMA
 from ..models.inn import INN
 from ..models.transfermer import Transfermer
-from ..models.cfm import CFM, CFMwithTransformer
-from ..models.didi import DirectDiffusion
+from ..models.transfermer_1d import Transfermer1d
+from ..models.cfm import CFM, CFMwithTransformer, TransfusionAR
+from ..models.didi import DirectDiffusion, DirectDiffusion_Padded
 from ..models.classifier import Classifier
 from ..models.fff import FreeFormFlow
 from .preprocessing import build_preprocessing, PreprocChain
@@ -255,6 +256,8 @@ class Model:
             Dictionary with loss terms averaged over all samples
         """
         self.model.eval()
+        if self.model.bayesian:
+            self.model.reset_random_state()
         n_total = 0
         total_losses = defaultdict(list)
         with torch.no_grad():
@@ -308,6 +311,7 @@ class Model:
                         while True:
                             try:
                                 data_batches.append(self.model.sample(cs))
+                                #data_batches.append(xs)
                                 break
                             except AssertionError:
                                 print(f"    Batch failed, repeating")
@@ -317,7 +321,6 @@ class Model:
                 if self.model.bayesian:
                     print(f"    Finished bayesian sample {i} in {time.time() - t0}", flush=True)
             all_samples = torch.stack(all_samples, dim=0)
-            print(all_samples.shape)
             if self.model.bayesian:
                 return all_samples#.reshape(bayesian_samples, -1, 6)
             else:
@@ -333,43 +336,32 @@ class Model:
         if loader is None:
             loader = self.test_loader
         self.model.eval()
-        #bayesian_samples = self.params.get("bayesian_samples", 20) if self.model.bayesian else 1
-        bayesian_samples = 2 if self.model.bayesian else 1
-        max_batches = min(len(loader), self.params.get("max_dist_batches", 2))
+        max_batches = min(len(loader), self.params.get("max_dist_batches", 1))
         samples_per_event = self.params.get("dist_samples_per_event", 5)
+        if self.model.bayesian:
+            for layer in self.model.bayesian_layers:
+                layer.map = True
+
         with torch.no_grad():
             all_samples = []
-            for j in range(bayesian_samples):
-                offset = j * max_batches * samples_per_event
-                if self.model.bayesian:
-                    self.model.reset_random_state()
-                for i, (xs, cs) in enumerate(loader):
-                    if i == max_batches:
-                        break
-                    data_batches = []
-                    for _ in self.progress(
-                        range(samples_per_event),
-                        desc="  Generating",
-                        leave=False,
-                        initial=offset + i * samples_per_event,
-                        total=bayesian_samples * max_batches * samples_per_event,
-                    ):
-                        while True:
-                            try:
-                                data_batches.append(self.model.sample(cs))
-                                break
-                            except AssertionError:
-                                print("Batch failed, repeating")
-                    all_samples.append(torch.stack(data_batches, dim=1))
+            for i, (xs, cs) in enumerate(loader):
+                if i == max_batches:
+                    break
+                data_batches = []
+                for _ in self.progress(
+                    range(samples_per_event),
+                    desc="  Generating",
+                    leave=False,
+                ):
+                    while True:
+                        try:
+                            data_batches.append(self.model.sample(cs))
+                            break
+                        except AssertionError:
+                            print("Batch failed, repeating")
+                all_samples.append(torch.stack(data_batches, dim=1))
             all_samples = torch.cat(all_samples, dim=0)
-            if self.model.bayesian:
-                return all_samples.reshape(
-                    bayesian_samples,
-                    len(all_samples) // bayesian_samples,
-                    *all_samples.shape[1:],
-                )
-            else:
-                return all_samples
+            return all_samples
 
     def save(self, name: str):
         """
@@ -429,11 +421,14 @@ class GenerativeUnfolding(Model):
     ):
         self.process = process
 
-        self.hard_pp = build_preprocessing(params.get("hard_preprocessing", {}), n_dim=params["dims_in"])
-        self.reco_pp = build_preprocessing(params.get("reco_preprocessing", {}), n_dim=params["dims_c"])
+        self.hard_pp = build_preprocessing(params.get("hard_preprocessing", {}))
+        self.reco_pp = build_preprocessing(params.get("reco_preprocessing", {}))
         self.hard_pp.to(device)
         self.reco_pp.to(device)
-        self.latent_dimension = self.hard_pp.output_shape[0]
+
+        params["dims_in"] = self.hard_pp.output_shape[0]
+        params["dims_c"] = self.reco_pp.output_shape[0]
+
 
         super().__init__(
             params,
@@ -462,6 +457,7 @@ class GenerativeUnfolding(Model):
             self.reco_pp.init_normalization(data[0].x_reco)
         self.input_data_preprocessed = tuple(self.hard_pp(subset.x_hard) for subset in data)
         self.cond_data_preprocessed = tuple(self.reco_pp(subset.x_reco) for subset in data)
+        print(f"    Preprocessed: Hard train shape {self.input_data_preprocessed[0].shape}, Reco train shape {self.cond_data_preprocessed[0].shape}")
         super(GenerativeUnfolding, self).init_data_loaders(self.input_data_preprocessed, self.cond_data_preprocessed)
 
     def begin_epoch(self):
@@ -499,10 +495,16 @@ class GenerativeUnfolding(Model):
             tensor with samples, shape (n_events, dims_in)
         """
         samples = super().predict(loader)
-        samples_pp = self.hard_pp(
-            samples.reshape(-1, samples.shape[-1]), rev=True, batch_size=1000
-        )
-        return samples_pp.reshape(*samples.shape[:-1], *samples_pp.shape[1:])
+        if self.model.bayesian:
+            samples_pp = torch.zeros((samples.shape[0], samples.shape[1], samples.shape[2], *self.hard_pp.input_shape))
+            for bayesian_sample in range(samples.shape[0]):
+                for unfolding in range(samples.shape[1]):
+                    samples_pp[bayesian_sample, unfolding] = self.hard_pp(samples[bayesian_sample, unfolding], rev=True)
+        else:
+            samples_pp = torch.zeros((samples.shape[0], samples.shape[1], *self.hard_pp.input_shape))
+            for unfolding in range(samples.shape[0]):
+                samples_pp[unfolding] = self.hard_pp(samples[unfolding], rev=True)
+        return samples_pp
 
     def predict_distribution(self, loader=None) -> torch.Tensor:
         """
@@ -517,10 +519,7 @@ class GenerativeUnfolding(Model):
             rev=True,
             batch_size=1000,
         )
-        if self.model.bayesian:
-            return samples_pp.reshape(*samples.shape[:3], *samples_pp.shape[1:])
-        else:
-            return samples_pp.reshape(*samples.shape[:2], *samples_pp.shape[1:])
+        return samples_pp.reshape(*samples.shape[:2], *samples_pp.shape[1:])
 
 
 class Omnifold(Model):
@@ -538,7 +537,8 @@ class Omnifold(Model):
         self.reco_pp = build_preprocessing(params["reco_preprocessing"], n_dim=params["dims_in"])
         self.hard_pp.to(device)
         self.reco_pp.to(device)
-        self.latent_dimension = self.hard_pp.output_shape[0]
+        params["dims_in"] = self.hard_pp.output_shape[0]
+        params["dims_c"] = self.reco_pp.output_shape[0]
 
         super().__init__(
             params,
@@ -557,6 +557,7 @@ class Omnifold(Model):
         label_data = tuple(subset.label for subset in data)
         self.reco_pp.init_normalization(data[0].x_reco)
         reco_data = tuple(self.reco_pp(subset.x_reco) for subset in data)
+
         super(Omnifold, self).init_data_loaders(label_data, reco_data)
 
     def predict_probs(self, loader=None):

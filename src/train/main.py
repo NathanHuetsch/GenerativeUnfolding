@@ -7,9 +7,11 @@ import numpy as np
 
 from .documenter import Documenter
 from .train import Model, GenerativeUnfolding, Omnifold
-from .plots import Plots, OmnifoldPlots
+from .plots import Plots, OmnifoldPlots, TTBar_Plots
 from ..processes.base import Process
 from ..processes.zjets.process import ZJetsGenerative, ZJetsOmnifold
+from ..processes.ttbar.process import TTBarGenerative
+from ..processes.ttbar_v2.process import TTBarGenerative_v2
 
 
 def init_train_args(subparsers):
@@ -56,6 +58,13 @@ def init_run(doc: Documenter, params: dict, verbose: bool) -> tuple[Model, Proce
     device = torch.device("cuda:0" if use_cuda else "cpu")
     print("------- Loading data -------")
     dataset = params.get("process", "ZJetsGenerative")
+    #if dataset == "ZJetsGenerative" or dataset == "ZJetsOmnifold":
+    #    params["dims_in"] = 6
+    #    params["dims_c"] = 6
+    #else:
+    #    params["dims_in"] = 21
+    #    params["dims_c"] = 22
+
     loader = params["process_params"].get("loader", "theirs")
     print(f"    Process: {dataset}, loader {loader}")
     process = eval(dataset)(params["process_params"], device)
@@ -64,15 +73,14 @@ def init_run(doc: Documenter, params: dict, verbose: bool) -> tuple[Model, Proce
         process.get_data("val"),
         process.get_data("test"),
     )
-    dims_in = data[0].x_hard.shape[1]
-    dims_c = data[0].x_reco.shape[1]
-    params["dims_in"] = dims_in
-    params["dims_c"] = dims_c
+
+    params["shape_in"] = tuple(data[0].x_hard.shape)
+    params["shape_c"] = tuple(data[0].x_reco.shape)
     print(f"    Train events: {len(data[0].x_hard)}")
     print(f"    Val events: {len(data[1].x_hard)}")
     print(f"    Test events: {len(data[2].x_hard)}")
-    print(f"    Hard dimension: {dims_in}")
-    print(f"    Reco dimension: {dims_c}")
+    print(f"    Hard shape: {data[0].x_hard.shape}")
+    print(f"    Reco shape: {data[0].x_reco.shape}")
 
     model_path = doc.get_file("model", False)
     os.makedirs(model_path, exist_ok=True)
@@ -156,22 +164,22 @@ def evaluation_generative(
     plots.plot_observables_full(doc.add_file("observables_full" + name + ".pdf"), None)
 
     if params.get("plot_metrics", False):
-        plots.hist_metrics_unfoldings(doc.add_file("unfolding_metrics"+name+".pdf"), pickle_file)
+        plots.hist_metrics_unfoldings(doc.add_file("unfolding_metrics"+name+".pdf"))
         plots.plot_multiple_unfoldings(doc.add_file("unfolding_samples"+name+".pdf"))
 
         if model.model.bayesian:
-            plots.hist_metrics_bayesian(doc.add_file("bayesian_metrics" + name + ".pdf"), pickle_file)
+            plots.hist_metrics_bayesian(doc.add_file("bayesian_metrics" + name + ".pdf"))
             plots.plot_multiple_bayesians(doc.add_file("bayesian_samples" + name + ".pdf"))
 
     #if params.get("plot_preprocessed", True) and name == "":
     #    print(f"    Plotting preprocessed data")
     #    plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
-    #print(f"    Plotting calibration")
-    #plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
+    print(f"    Plotting calibration")
+    plots.plot_calibration(doc.add_file("calibration"+name+".pdf"))
     #print(f"    Plotting pulls")
     #plots.plot_pulls(doc.add_file("pulls"+name+".pdf"))
-    #print(f"    Plotting single events")
-    #plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
+    print(f"    Plotting single events")
+    plots.plot_single_events(doc.add_file("single_events"+name+".pdf"))
     #print(f"    Plotting migration")
     #plots.plot_migration(doc.add_file("migration" + name + ".pdf"))
     plots.plot_migration2(doc.add_file("migration2" + name + ".pdf"))
@@ -314,6 +322,79 @@ def evaluation_omnifold(
     plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
 
 
+def evaluation_ttbar(
+    doc: Documenter,
+    params: dict,
+    model: Model,
+    process: Process,
+    data: str = "test",
+    model_name: str = "final",
+    name: str = ""):
+
+    print(f"Checkpoint: {model_name},  Data: {data}")
+    if data == "test":
+        loader = model.test_loader
+    elif data == "train":
+        loader = model.train_loader
+    elif data == "analysis":
+        analysis_data = process.get_data("analysis")
+        val_loader_kwargs = {"shuffle": False, "batch_size": 10*params["batch_size"], "drop_last": False}
+        loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(model.hard_pp(analysis_data.x_hard).float(),
+                                           model.reco_pp(analysis_data.x_reco).float()),
+            **val_loader_kwargs,
+        )
+
+    model.load(model_name)
+
+    print(f"    Generating single samples")
+    t0 = time.time()
+    x_gen_single = model.predict(loader=loader)
+    t1 = time.time()
+    time_diff = timedelta(seconds=round(t1 - t0))
+    print(f"    Generation completed after {time_diff}")
+
+    x_gen_dist = model.predict_distribution(loader=loader)
+
+    if params.get("compute_test_loss", False):
+        print(f"    Computing test loss")
+        test_ll = model.dataset_loss(loader=loader)["loss"]
+        print(f"    Result: {test_ll:.4f}")
+
+    print(f"    Computing observables")
+    data = process.get_data(data)
+    observables = process.hard_observables()
+    data_hard_pp = model.input_data_preprocessed[0]
+    data_reco_pp = model.cond_data_preprocessed[0]
+    plots = TTBar_Plots(
+        observables=observables,
+        losses=model.losses,
+        x_hard=data.x_hard,
+        x_gen_single=x_gen_single,
+        x_hard_pp=data_hard_pp,
+        x_reco_pp=data_reco_pp,
+        bayesian=model.model.bayesian,
+        x_gen_dist=x_gen_dist
+    )
+    if name == "":
+        print(f"    Plotting loss")
+        plots.plot_losses(doc.add_file("losses"+name+".pdf"))
+    print(f"    Plotting observables")
+    #if params.get("save_hist_data", True):
+    pickle_file = doc.add_file("observables"+name+".pkl")
+    #else:
+    #    pickle_file = None
+    plots.plot_observables(doc.add_file("observables"+name+".pdf"), pickle_file)
+
+    print(f"    Plotting preprocessed data")
+    plots.plot_preprocessed(doc.add_file("preprocessed" + name + ".pdf"))
+
+    #print(f"    Plotting calibration")
+    #plots.plot_calibration(doc.add_file("calibration" + name + ".pdf"))
+    #print(f"    Plotting single events")
+    #plots.plot_single_events(doc.add_file("single_events" + name + ".pdf"))
+
+
 def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
 
     if params.get("method", "GenerativeUnfolding") == "Omnifold":
@@ -321,6 +402,10 @@ def eval_model(doc: Documenter, params: dict, model: Model, process: Process):
         evaluate_analysis = False
     else:
         evaluation = evaluation_generative
+        evaluate_analysis = params.get("evaluate_analysis")
+
+    if isinstance(process, TTBarGenerative) or isinstance(process, TTBarGenerative_v2):
+        evaluation = evaluation_ttbar
         evaluate_analysis = params.get("evaluate_analysis")
 
     evaluation(doc, params, model, process)

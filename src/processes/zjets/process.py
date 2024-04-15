@@ -4,7 +4,7 @@ import numpy as np
 import warnings
 
 from ..base import Process, ProcessData, Observable
-from ..observables import Observable, momenta_to_observables
+from ..observables import Observable, ZJets_Observables
 
 
 class ZJetsGenerative(Process):
@@ -129,7 +129,7 @@ class ZJetsGenerative(Process):
         Returns:
             List of observables
         """
-        return momenta_to_observables()
+        return ZJets_Observables()
 
     def reco_observables(self) -> list[Observable]:
         """
@@ -138,7 +138,7 @@ class ZJetsGenerative(Process):
         Returns:
             List of observables
         """
-        return momenta_to_observables()
+        return ZJets_Observables()
 
 
 class ZJetsOmnifold(ZJetsGenerative):
@@ -232,7 +232,9 @@ class ZJetsOmnifold(ZJetsGenerative):
         assert len(label) == n_events
         assert len(x_reco) == n_events
 
+        torch.manual_seed(0)
         permutation = torch.randperm(n_events)
+
         x_hard = x_hard[permutation]
         x_reco = x_reco[permutation]
         label = label[permutation]
